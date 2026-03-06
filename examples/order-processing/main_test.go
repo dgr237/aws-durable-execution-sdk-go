@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/client"
-	durableTesting "github.com/dgr237/aws-durable-execution-sdk-go/testing"
+	durableTesting "github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/testing"
 )
 
 func TestOrderProcessing(t *testing.T) {
