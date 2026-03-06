@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable"
 	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/client"
 	durableconfig "github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/config"
@@ -27,8 +28,8 @@ const (
 type OperationResult struct {
 	OperationID   string
 	OperationName string
-	Type          client.OperationType
-	Status        client.OperationStatus
+	Type          types.OperationType
+	Status        types.OperationStatus
 	Result        interface{}
 	Error         error
 }
@@ -132,7 +133,7 @@ func (r *LocalDurableTestRunner) Run(config RunConfig) (*ExecutionResult, error)
 
 	// Create initial state
 	initialState := client.InitialExecutionState{
-		Operations: []client.Operation{},
+		Operations: []types.Operation{},
 	}
 
 	// Create execution state
@@ -178,7 +179,7 @@ func (r *LocalDurableTestRunner) Run(config RunConfig) (*ExecutionResult, error)
 
 		// Extract result based on operation type
 		switch op.Type {
-		case client.OperationTypeStep:
+		case types.OperationTypeStep:
 			if op.StepDetails != nil {
 				if op.StepDetails.Result != nil {
 					var value interface{}
@@ -214,7 +215,7 @@ func (r *LocalDurableTestRunner) GetOperation(name string) (*OperationResult, er
 	return nil, fmt.Errorf("operation not found: %s", name)
 }
 
-func getOperationName(op client.Operation) string {
+func getOperationName(op types.Operation) string {
 	if op.Name != nil {
 		return *op.Name
 	}
@@ -223,15 +224,15 @@ func getOperationName(op client.Operation) string {
 
 // mockLambdaClient is a mock Lambda client for testing.
 type mockLambdaClient struct {
-	operations map[string]client.Operation
-	updates    []client.OperationUpdate
+	operations map[string]types.Operation
+	updates    []types.OperationUpdate
 	mu         sync.RWMutex
 }
 
 func newMockLambdaClient() *mockLambdaClient {
 	return &mockLambdaClient{
-		operations: make(map[string]client.Operation),
-		updates:    make([]client.OperationUpdate, 0),
+		operations: make(map[string]types.Operation),
+		updates:    make([]types.OperationUpdate, 0),
 	}
 }
 
@@ -239,7 +240,7 @@ func (m *mockLambdaClient) GetDurableExecutionState(ctx context.Context, marker 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	ops := make([]client.Operation, 0, len(m.operations))
+	ops := make([]types.Operation, 0, len(m.operations))
 	for _, op := range m.operations {
 		ops = append(ops, op)
 	}
@@ -250,7 +251,7 @@ func (m *mockLambdaClient) GetDurableExecutionState(ctx context.Context, marker 
 	}, nil
 }
 
-func (m *mockLambdaClient) CheckpointDurableExecution(ctx context.Context, updates []client.OperationUpdate) (*client.CheckpointOutput, error) {
+func (m *mockLambdaClient) CheckpointDurableExecution(ctx context.Context, updates []types.OperationUpdate) (*client.CheckpointOutput, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -273,74 +274,74 @@ func (m *mockLambdaClient) InvokeFunction(ctx context.Context, functionArn strin
 	return []byte(`{"success": true}`), nil
 }
 
-func applyUpdateToOp(op client.Operation, update client.OperationUpdate) client.Operation {
+func applyUpdateToOp(op types.Operation, update types.OperationUpdate) types.Operation {
 	switch update.Action {
-	case client.OperationActionStart:
-		op.Status = client.OperationStatusStarted
-	case client.OperationActionSucceed:
-		op.Status = client.OperationStatusSucceeded
-	case client.OperationActionFail:
-		op.Status = client.OperationStatusFailed
+	case types.OperationActionStart:
+		op.Status = types.OperationStatusStarted
+	case types.OperationActionSucceed:
+		op.Status = types.OperationStatusSucceeded
+	case types.OperationActionFail:
+		op.Status = types.OperationStatusFailed
 	}
 
 	if update.Payload != nil {
 		switch update.Type {
-		case client.OperationTypeStep:
+		case types.OperationTypeStep:
 			if op.StepDetails == nil {
-				op.StepDetails = &client.StepDetails{}
+				op.StepDetails = &types.StepDetails{}
 			}
 			op.StepDetails.Result = update.Payload
 		}
 	}
 	if update.Error != nil {
 		switch update.Type {
-		case client.OperationTypeStep:
+		case types.OperationTypeStep:
 			if op.StepDetails == nil {
-				op.StepDetails = &client.StepDetails{}
+				op.StepDetails = &types.StepDetails{}
 			}
 			op.StepDetails.Error = update.Error
 		}
 	}
 	if update.WaitOptions != nil {
 		if op.WaitDetails == nil {
-			op.WaitDetails = &client.WaitDetails{}
+			op.WaitDetails = &types.WaitDetails{}
 		}
 	}
 
 	return op
 }
 
-func createOpFromUpdate(update client.OperationUpdate) client.Operation {
-	var status client.OperationStatus
+func createOpFromUpdate(update types.OperationUpdate) types.Operation {
+	var status types.OperationStatus
 	switch update.Action {
-	case client.OperationActionStart:
-		status = client.OperationStatusStarted
-	case client.OperationActionSucceed:
-		status = client.OperationStatusSucceeded
-	case client.OperationActionFail:
-		status = client.OperationStatusFailed
+	case types.OperationActionStart:
+		status = types.OperationStatusStarted
+	case types.OperationActionSucceed:
+		status = types.OperationStatusSucceeded
+	case types.OperationActionFail:
+		status = types.OperationStatusFailed
 	default:
-		status = client.OperationStatusStarted
+		status = types.OperationStatusStarted
 	}
 
-	op := client.Operation{
+	op := types.Operation{
 		Id:      update.Id,
 		Name:    update.Name,
 		Type:    update.Type,
 		Status:  status,
 		SubType: update.SubType,
 	}
-	if update.Payload != nil && update.Type == client.OperationTypeStep {
-		op.StepDetails = &client.StepDetails{Result: update.Payload}
+	if update.Payload != nil && update.Type == types.OperationTypeStep {
+		op.StepDetails = &types.StepDetails{Result: update.Payload}
 	}
-	if update.Error != nil && update.Type == client.OperationTypeStep {
+	if update.Error != nil && update.Type == types.OperationTypeStep {
 		if op.StepDetails == nil {
-			op.StepDetails = &client.StepDetails{}
+			op.StepDetails = &types.StepDetails{}
 		}
 		op.StepDetails.Error = update.Error
 	}
 	if update.WaitOptions != nil {
-		op.WaitDetails = &client.WaitDetails{}
+		op.WaitDetails = &types.WaitDetails{}
 	}
 
 	return op

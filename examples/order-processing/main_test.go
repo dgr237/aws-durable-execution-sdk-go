@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/client"
 	durableTesting "github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/testing"
 )
@@ -52,7 +53,7 @@ func TestOrderProcessing(t *testing.T) {
 		t.Fatalf("validate-order operation not found: %v", err)
 	}
 
-	if validateOp.Status != client.OperationStatusSucceeded {
+	if validateOp.Status != types.OperationStatusSucceeded {
 		t.Errorf("validate-order should succeed, got %v", validateOp.Status)
 	}
 
@@ -61,7 +62,7 @@ func TestOrderProcessing(t *testing.T) {
 		t.Fatalf("process-payment operation not found: %v", err)
 	}
 
-	if paymentOp.Status != client.OperationStatusSucceeded {
+	if paymentOp.Status != types.OperationStatusSucceeded {
 		t.Errorf("process-payment should succeed, got %v", paymentOp.Status)
 	}
 }

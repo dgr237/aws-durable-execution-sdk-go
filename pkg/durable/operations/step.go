@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable"
 	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/client"
 	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/config"
@@ -77,11 +78,11 @@ func StepWithConfig[T any](ctx context.Context, name string, fn func(context.Con
 
 	// Create START checkpoint
 	subType := client.OperationSubTypeStep
-	startUpdate := client.OperationUpdate{
+	startUpdate := types.OperationUpdate{
 		Id:      aws.String(opID.OperationID),
 		Name:    &name,
-		Type:    client.OperationTypeStep,
-		Action:  client.OperationActionStart,
+		Type:    types.OperationTypeStep,
+		Action:  types.OperationActionStart,
 		SubType: &subType,
 	}
 
@@ -103,16 +104,16 @@ func StepWithConfig[T any](ctx context.Context, name string, fn func(context.Con
 		// Step failed, checkpoint failure
 		durablecontext.Logger(ctx).Error("Step failed: %s - %v", name, err)
 
-		errorObj := &client.ErrorObject{
+		errorObj := &types.ErrorObject{
 			ErrorType:    aws.String("StepError"),
 			ErrorMessage: aws.String(err.Error()),
 		}
 
-		failUpdate := client.OperationUpdate{
+		failUpdate := types.OperationUpdate{
 			Id:     aws.String(opID.OperationID),
 			Name:   &name,
-			Type:   client.OperationTypeStep,
-			Action: client.OperationActionFail,
+			Type:   types.OperationTypeStep,
+			Action: types.OperationActionFail,
 			Error:  errorObj,
 		}
 
@@ -127,11 +128,11 @@ func StepWithConfig[T any](ctx context.Context, name string, fn func(context.Con
 			decision := cfg.RetryStrategy(err, 1)
 			if decision.ShouldRetry {
 				// Schedule retry
-				retryUpdate := client.OperationUpdate{
+				retryUpdate := types.OperationUpdate{
 					Id:     aws.String(opID.OperationID),
-					Type:   client.OperationTypeStep,
-					Action: client.OperationActionRetry,
-					StepOptions: &client.StepOptions{
+					Type:   types.OperationTypeStep,
+					Action: types.OperationActionRetry,
+					StepOptions: &types.StepOptions{
 						NextAttemptDelaySeconds: aws.Int32(int32(decision.Delay.Seconds)),
 					},
 				}
@@ -159,11 +160,11 @@ func StepWithConfig[T any](ctx context.Context, name string, fn func(context.Con
 		return zero, fmt.Errorf("failed to serialize step result: %w", err)
 	}
 
-	successUpdate := client.OperationUpdate{
+	successUpdate := types.OperationUpdate{
 		Id:      aws.String(opID.OperationID),
 		Name:    &name,
-		Type:    client.OperationTypeStep,
-		Action:  client.OperationActionSucceed,
+		Type:    types.OperationTypeStep,
+		Action:  types.OperationActionSucceed,
 		Payload: &serialized,
 	}
 

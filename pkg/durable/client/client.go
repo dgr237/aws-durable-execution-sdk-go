@@ -14,58 +14,9 @@ import (
 // SDK type aliases – these are direct references to the AWS Lambda SDK types,
 // eliminating any need for conversion between our types and the SDK types.
 type (
-	Operation       = types.Operation
-	OperationUpdate = types.OperationUpdate
-	OperationType   = types.OperationType
-	OperationStatus = types.OperationStatus
-	OperationAction = types.OperationAction
 	// OperationSubType is a string subtype that further categorises an operation.
 	// The Lambda SDK represents this as a plain *string field (SubType).
-	OperationSubType     = string
-	ErrorObject          = types.ErrorObject
-	ExecutionDetails     = types.ExecutionDetails
-	StepDetails          = types.StepDetails
-	WaitDetails          = types.WaitDetails
-	CallbackDetails      = types.CallbackDetails
-	ChainedInvokeDetails = types.ChainedInvokeDetails
-	ContextDetails       = types.ContextDetails
-	// Option types used when building OperationUpdate values.
-	StepOptions          = types.StepOptions
-	WaitOptions          = types.WaitOptions
-	CallbackOptions      = types.CallbackOptions
-	ChainedInvokeOptions = types.ChainedInvokeOptions
-	ContextOptions       = types.ContextOptions
-)
-
-// OperationType constants re-exported from the SDK.
-const (
-	OperationTypeExecution     = types.OperationTypeExecution
-	OperationTypeContext       = types.OperationTypeContext
-	OperationTypeStep          = types.OperationTypeStep
-	OperationTypeWait          = types.OperationTypeWait
-	OperationTypeCallback      = types.OperationTypeCallback
-	OperationTypeChainedInvoke = types.OperationTypeChainedInvoke
-)
-
-// OperationStatus constants re-exported from the SDK.
-const (
-	OperationStatusStarted   = types.OperationStatusStarted
-	OperationStatusPending   = types.OperationStatusPending
-	OperationStatusReady     = types.OperationStatusReady
-	OperationStatusSucceeded = types.OperationStatusSucceeded
-	OperationStatusFailed    = types.OperationStatusFailed
-	OperationStatusCancelled = types.OperationStatusCancelled
-	OperationStatusTimedOut  = types.OperationStatusTimedOut
-	OperationStatusStopped   = types.OperationStatusStopped
-)
-
-// OperationAction constants re-exported from the SDK.
-const (
-	OperationActionStart   = types.OperationActionStart
-	OperationActionSucceed = types.OperationActionSucceed
-	OperationActionFail    = types.OperationActionFail
-	OperationActionRetry   = types.OperationActionRetry
-	OperationActionCancel  = types.OperationActionCancel
+	OperationSubType = string
 )
 
 // OperationSubType string constants. The Lambda SDK exposes SubType as a
@@ -94,8 +45,8 @@ type DurableExecutionEvent struct {
 
 // InitialExecutionState represents the initial state loaded from Lambda.
 type InitialExecutionState struct {
-	Operations []Operation `json:"Operations"`
-	NextMarker string      `json:"NextMarker,omitempty"`
+	Operations []types.Operation `json:"Operations"`
+	NextMarker string            `json:"NextMarker,omitempty"`
 }
 
 // GetExecutionOperation returns the execution operation from the initial state.
@@ -103,14 +54,14 @@ type InitialExecutionState struct {
 // the initial page of results. This is expected behavior, and the function returns
 // nil (not an error) in this case. The execution operation will be available after
 // loading subsequent pages via NextMarker.
-func (i *InitialExecutionState) GetExecutionOperation() (*Operation, error) {
+func (i *InitialExecutionState) GetExecutionOperation() (*types.Operation, error) {
 	if len(i.Operations) == 0 {
 		// No operations found in initial execution state.
 		// This can happen due to payload size limitations and is expected behavior.
 		return nil, nil
 	}
 
-	if i.Operations[0].Type != OperationTypeExecution {
+	if i.Operations[0].Type != types.OperationTypeExecution {
 		return nil, fmt.Errorf("first operation is not an execution operation: %s", i.Operations[0].Type)
 	}
 
@@ -145,7 +96,7 @@ type CheckpointOutput struct {
 
 // StateOutput represents the result of getting execution state.
 type StateOutput struct {
-	Operations []Operation
+	Operations []types.Operation
 	NextMarker string
 }
 
@@ -158,7 +109,7 @@ type DurableClient interface {
 // LambdaServiceClient defines the interface for Lambda service operations.
 type LambdaServiceClient interface {
 	GetDurableExecutionState(ctx context.Context, marker string) (*StateOutput, error)
-	CheckpointDurableExecution(ctx context.Context, updates []OperationUpdate) (*CheckpointOutput, error)
+	CheckpointDurableExecution(ctx context.Context, updates []types.OperationUpdate) (*CheckpointOutput, error)
 	InvokeFunction(ctx context.Context, functionArn string, payload []byte) ([]byte, error)
 }
 
@@ -221,7 +172,7 @@ func (c *Client) GetDurableExecutionState(ctx context.Context, marker string) (*
 }
 
 // CheckpointDurableExecution creates a checkpoint with operation updates.
-func (c *Client) CheckpointDurableExecution(ctx context.Context, updates []OperationUpdate) (*CheckpointOutput, error) {
+func (c *Client) CheckpointDurableExecution(ctx context.Context, updates []types.OperationUpdate) (*CheckpointOutput, error) {
 	c.tokenMu.RLock()
 	token := c.checkpointToken
 	c.tokenMu.RUnlock()

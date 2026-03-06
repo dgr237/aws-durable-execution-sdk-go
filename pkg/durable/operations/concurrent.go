@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 
 	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable"
 	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/client"
@@ -47,11 +48,11 @@ func Map[T any, R any](ctx context.Context, name string, items []T, fn func(cont
 
 	subType := client.OperationSubTypeMap
 
-	startUpdate := client.OperationUpdate{
+	startUpdate := types.OperationUpdate{
 		Id:      aws.String(opID.OperationID),
 		Name:    &name,
-		Type:    client.OperationTypeContext,
-		Action:  client.OperationActionStart,
+		Type:    types.OperationTypeContext,
+		Action:  types.OperationActionStart,
 		SubType: &subType,
 	}
 
@@ -70,15 +71,15 @@ func Map[T any, R any](ctx context.Context, name string, items []T, fn func(cont
 		}
 
 		// Map failed
-		errorObj := &client.ErrorObject{
+		errorObj := &types.ErrorObject{
 			ErrorType:    aws.String("MapError"),
 			ErrorMessage: aws.String(err.Error()),
 		}
 
-		failUpdate := client.OperationUpdate{
+		failUpdate := types.OperationUpdate{
 			Id:     aws.String(opID.OperationID),
-			Type:   client.OperationTypeContext,
-			Action: client.OperationActionFail,
+			Type:   types.OperationTypeContext,
+			Action: types.OperationActionFail,
 			Error:  errorObj,
 		}
 
@@ -105,10 +106,10 @@ func Map[T any, R any](ctx context.Context, name string, items []T, fn func(cont
 		return nil, fmt.Errorf("failed to serialize map result: %w", err)
 	}
 
-	successUpdate := client.OperationUpdate{
+	successUpdate := types.OperationUpdate{
 		Id:      aws.String(opID.OperationID),
-		Type:    client.OperationTypeContext,
-		Action:  client.OperationActionSucceed,
+		Type:    types.OperationTypeContext,
+		Action:  types.OperationActionSucceed,
 		Payload: &serialized,
 	}
 
@@ -214,11 +215,11 @@ func Parallel[T any](ctx context.Context, name string, branches []durablecontext
 
 	subType := client.OperationSubTypeParallel
 
-	startUpdate := client.OperationUpdate{
+	startUpdate := types.OperationUpdate{
 		Id:      aws.String(opID.OperationID),
 		Name:    &name,
-		Type:    client.OperationTypeContext,
-		Action:  client.OperationActionStart,
+		Type:    types.OperationTypeContext,
+		Action:  types.OperationActionStart,
 		SubType: &subType,
 	}
 
@@ -237,15 +238,15 @@ func Parallel[T any](ctx context.Context, name string, branches []durablecontext
 		}
 
 		// Parallel failed
-		errorObj := &client.ErrorObject{
+		errorObj := &types.ErrorObject{
 			ErrorType:    aws.String("ParallelError"),
 			ErrorMessage: aws.String(err.Error()),
 		}
 
-		failUpdate := client.OperationUpdate{
+		failUpdate := types.OperationUpdate{
 			Id:     aws.String(opID.OperationID),
-			Type:   client.OperationTypeContext,
-			Action: client.OperationActionFail,
+			Type:   types.OperationTypeContext,
+			Action: types.OperationActionFail,
 			Error:  errorObj,
 		}
 
@@ -272,10 +273,10 @@ func Parallel[T any](ctx context.Context, name string, branches []durablecontext
 		return nil, fmt.Errorf("failed to serialize parallel result: %w", err)
 	}
 
-	successUpdate := client.OperationUpdate{
+	successUpdate := types.OperationUpdate{
 		Id:      aws.String(opID.OperationID),
-		Type:    client.OperationTypeContext,
-		Action:  client.OperationActionSucceed,
+		Type:    types.OperationTypeContext,
+		Action:  types.OperationActionSucceed,
 		Payload: &serialized,
 	}
 

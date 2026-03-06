@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable"
 	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/client"
 	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/config"
@@ -47,13 +48,13 @@ func WaitWithConfig(ctx context.Context, name string, duration config.Duration, 
 
 	subType := client.OperationSubTypeWait
 
-	startUpdate := client.OperationUpdate{
+	startUpdate := types.OperationUpdate{
 		Id:      aws.String(opID.OperationID),
 		Name:    &name,
-		Type:    client.OperationTypeWait,
-		Action:  client.OperationActionStart,
+		Type:    types.OperationTypeWait,
+		Action:  types.OperationActionStart,
 		SubType: &subType,
-		WaitOptions: &client.WaitOptions{
+		WaitOptions: &types.WaitOptions{
 			WaitSeconds: aws.Int32(int32(duration.Seconds)),
 		},
 	}
@@ -137,13 +138,13 @@ func InvokeWithConfig[T any](ctx context.Context, name string, functionArn strin
 
 	subType := client.OperationSubTypeChainedInvoke
 
-	startUpdate := client.OperationUpdate{
+	startUpdate := types.OperationUpdate{
 		Id:      aws.String(opID.OperationID),
 		Name:    &name,
-		Type:    client.OperationTypeChainedInvoke,
-		Action:  client.OperationActionStart,
+		Type:    types.OperationTypeChainedInvoke,
+		Action:  types.OperationActionStart,
 		SubType: &subType,
-		ChainedInvokeOptions: &client.ChainedInvokeOptions{
+		ChainedInvokeOptions: &types.ChainedInvokeOptions{
 			FunctionName: aws.String(functionArn),
 		},
 		Payload: &serializedPayload,
@@ -213,11 +214,11 @@ func RunInChildContextWithConfig[T any](ctx context.Context, name string, fn fun
 
 	subType := client.OperationSubTypeRunInChildContext
 
-	startUpdate := client.OperationUpdate{
+	startUpdate := types.OperationUpdate{
 		Id:      aws.String(opID.OperationID),
 		Name:    &name,
-		Type:    client.OperationTypeContext,
-		Action:  client.OperationActionStart,
+		Type:    types.OperationTypeContext,
+		Action:  types.OperationActionStart,
 		SubType: &subType,
 	}
 
@@ -248,15 +249,15 @@ func RunInChildContextWithConfig[T any](ctx context.Context, name string, fn fun
 		// Child context failed
 		durablecontext.Logger(ctx).Error("Child context failed: %s - %v", name, err)
 
-		errorObj := &client.ErrorObject{
+		errorObj := &types.ErrorObject{
 			ErrorType:    aws.String("ChildContextError"),
 			ErrorMessage: aws.String(err.Error()),
 		}
 
-		failUpdate := client.OperationUpdate{
+		failUpdate := types.OperationUpdate{
 			Id:     aws.String(opID.OperationID),
-			Type:   client.OperationTypeContext,
-			Action: client.OperationActionFail,
+			Type:   types.OperationTypeContext,
+			Action: types.OperationActionFail,
 			Error:  errorObj,
 		}
 
@@ -277,10 +278,10 @@ func RunInChildContextWithConfig[T any](ctx context.Context, name string, fn fun
 		return zero, fmt.Errorf("failed to serialize child context result: %w", err)
 	}
 
-	successUpdate := client.OperationUpdate{
+	successUpdate := types.OperationUpdate{
 		Id:      aws.String(opID.OperationID),
-		Type:    client.OperationTypeContext,
-		Action:  client.OperationActionSucceed,
+		Type:    types.OperationTypeContext,
+		Action:  types.OperationActionSucceed,
 		Payload: &serialized,
 	}
 
@@ -374,11 +375,11 @@ func CreateCallback[T any](ctx context.Context, name string, cfg config.WaitForC
 	callbackID := fmt.Sprintf("callback-%s", opID.OperationID)
 	subType := client.OperationSubTypeWaitForCallback
 
-	startUpdate := client.OperationUpdate{
+	startUpdate := types.OperationUpdate{
 		Id:      aws.String(opID.OperationID),
 		Name:    &name,
-		Type:    client.OperationTypeCallback,
-		Action:  client.OperationActionStart,
+		Type:    types.OperationTypeCallback,
+		Action:  types.OperationActionStart,
 		SubType: &subType,
 		Payload: aws.String(callbackID),
 	}
@@ -450,11 +451,11 @@ func WaitForCallback[T any](ctx context.Context, name string, submitter func(cal
 	callbackID := fmt.Sprintf("callback-%s", opID.OperationID)
 	subType := client.OperationSubTypeWaitForCallback
 
-	startUpdate := client.OperationUpdate{
+	startUpdate := types.OperationUpdate{
 		Id:      aws.String(opID.OperationID),
 		Name:    &name,
-		Type:    client.OperationTypeCallback,
-		Action:  client.OperationActionStart,
+		Type:    types.OperationTypeCallback,
+		Action:  types.OperationActionStart,
 		SubType: &subType,
 		Payload: aws.String(callbackID),
 	}
@@ -526,11 +527,11 @@ func WaitForCondition[S any, T any](ctx context.Context, name string, check func
 
 		subType := client.OperationSubTypeWaitForCondition
 
-		successUpdate := client.OperationUpdate{
+		successUpdate := types.OperationUpdate{
 			Id:      aws.String(opID.OperationID),
 			Name:    &name,
-			Type:    client.OperationTypeStep,
-			Action:  client.OperationActionSucceed,
+			Type:    types.OperationTypeStep,
+			Action:  types.OperationActionSucceed,
 			SubType: &subType,
 			Payload: &serialized,
 		}
@@ -555,13 +556,13 @@ func WaitForCondition[S any, T any](ctx context.Context, name string, check func
 
 	subType := client.OperationSubTypeWaitForCondition
 
-	retryUpdate := client.OperationUpdate{
+	retryUpdate := types.OperationUpdate{
 		Id:      aws.String(opID.OperationID),
 		Name:    &name,
-		Type:    client.OperationTypeStep,
-		Action:  client.OperationActionRetry,
+		Type:    types.OperationTypeStep,
+		Action:  types.OperationActionRetry,
 		SubType: &subType,
-		StepOptions: &client.StepOptions{
+		StepOptions: &types.StepOptions{
 			NextAttemptDelaySeconds: aws.Int32(int32(decision.Delay.Seconds)),
 		},
 	}

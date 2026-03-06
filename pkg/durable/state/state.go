@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/dgr237/aws-durable-execution-sdk-go/internal/checkpoint"
 	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/client"
 )
@@ -21,59 +22,59 @@ const (
 
 // CheckpointedResult represents the result of a checkpointed operation.
 type CheckpointedResult struct {
-	Operation *client.Operation
-	Status    client.OperationStatus
+	Operation *types.Operation
+	Status    types.OperationStatus
 	Result    *string
-	Error     *client.ErrorObject
+	Error     *types.ErrorObject
 }
 
 // IsSucceeded checks if the operation succeeded.
 func (c *CheckpointedResult) IsSucceeded() bool {
-	return c.Status == client.OperationStatusSucceeded
+	return c.Status == types.OperationStatusSucceeded
 }
 
 // IsFailed checks if the operation failed.
 func (c *CheckpointedResult) IsFailed() bool {
-	return c.Status == client.OperationStatusFailed
+	return c.Status == types.OperationStatusFailed
 }
 
 // IsPending checks if the operation is pending.
 func (c *CheckpointedResult) IsPending() bool {
-	return c.Status == client.OperationStatusPending
+	return c.Status == types.OperationStatusPending
 }
 
 // IsReady checks if the operation is ready.
 func (c *CheckpointedResult) IsReady() bool {
-	return c.Status == client.OperationStatusReady
+	return c.Status == types.OperationStatusReady
 }
 
 // IsStarted checks if the operation is started.
 func (c *CheckpointedResult) IsStarted() bool {
-	return c.Status == client.OperationStatusStarted
+	return c.Status == types.OperationStatusStarted
 }
 
 // CreateCheckpointedResultFromOperation creates a result from an operation.
-func CreateCheckpointedResultFromOperation(op client.Operation) CheckpointedResult {
+func CreateCheckpointedResultFromOperation(op types.Operation) CheckpointedResult {
 	var result *string
-	var errorObj *client.ErrorObject
+	var errorObj *types.ErrorObject
 
 	switch op.Type {
-	case client.OperationTypeStep:
+	case types.OperationTypeStep:
 		if op.StepDetails != nil {
 			result = op.StepDetails.Result
 			errorObj = op.StepDetails.Error
 		}
-	case client.OperationTypeCallback:
+	case types.OperationTypeCallback:
 		if op.CallbackDetails != nil {
 			result = op.CallbackDetails.Result
 			errorObj = op.CallbackDetails.Error
 		}
-	case client.OperationTypeChainedInvoke:
+	case types.OperationTypeChainedInvoke:
 		if op.ChainedInvokeDetails != nil {
 			result = op.ChainedInvokeDetails.Result
 			errorObj = op.ChainedInvokeDetails.Error
 		}
-	case client.OperationTypeContext:
+	case types.OperationTypeContext:
 		if op.ContextDetails != nil {
 			result = op.ContextDetails.Result
 			errorObj = op.ContextDetails.Error
@@ -91,17 +92,17 @@ func CreateCheckpointedResultFromOperation(op client.Operation) CheckpointedResu
 // ExecutionState manages the state of a durable execution.
 type ExecutionState struct {
 	mu                  sync.RWMutex
-	operations          map[string]client.Operation
+	operations          map[string]types.Operation
 	client              client.LambdaServiceClient
 	replayStatus        ReplayStatus
-	checkpointQueue     chan client.OperationUpdate
+	checkpointQueue     chan types.OperationUpdate
 	checkpointWaitGroup sync.WaitGroup
 	closed              bool
 }
 
 // NewExecutionState creates a new execution state.
 func NewExecutionState(ctx context.Context, lambdaClient client.LambdaServiceClient, initialState client.InitialExecutionState) *ExecutionState {
-	operations := make(map[string]client.Operation)
+	operations := make(map[string]types.Operation)
 	for _, op := range initialState.Operations {
 		if op.Id != nil {
 			operations[*op.Id] = op
@@ -118,7 +119,7 @@ func NewExecutionState(ctx context.Context, lambdaClient client.LambdaServiceCli
 		operations:      operations,
 		client:          lambdaClient,
 		replayStatus:    replayStatus,
-		checkpointQueue: make(chan client.OperationUpdate, 100),
+		checkpointQueue: make(chan types.OperationUpdate, 100),
 		closed:          false,
 	}
 
@@ -148,7 +149,7 @@ func (s *ExecutionState) GetCheckpointResult(operationID string) CheckpointedRes
 }
 
 // Checkpoint adds an operation update to the checkpoint queue.
-func (s *ExecutionState) Checkpoint(update client.OperationUpdate) error {
+func (s *ExecutionState) Checkpoint(update types.OperationUpdate) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -168,13 +169,13 @@ func (s *ExecutionState) Checkpoint(update client.OperationUpdate) error {
 // CheckpointSync performs a synchronous checkpoint.
 // The context parameter allows callers to pass their current context,
 // respecting any cancellation signals or timeouts.
-func (s *ExecutionState) CheckpointSync(ctx context.Context, update client.OperationUpdate) error {
+func (s *ExecutionState) CheckpointSync(ctx context.Context, update types.OperationUpdate) error {
 	s.mu.Lock()
 	s.updateLocalState(update)
 	s.mu.Unlock()
 
 	// Send directly to Lambda service
-	output, err := s.client.CheckpointDurableExecution(ctx, []client.OperationUpdate{update})
+	output, err := s.client.CheckpointDurableExecution(ctx, []types.OperationUpdate{update})
 	if err != nil {
 		return fmt.Errorf("failed to checkpoint: %w", err)
 	}
@@ -184,7 +185,7 @@ func (s *ExecutionState) CheckpointSync(ctx context.Context, update client.Opera
 }
 
 // updateLocalState updates the local operation state (must be called with lock held).
-func (s *ExecutionState) updateLocalState(update client.OperationUpdate) {
+func (s *ExecutionState) updateLocalState(update types.OperationUpdate) {
 	id := aws.ToString(update.Id)
 	if existing, exists := s.operations[id]; exists {
 		// Update existing operation
@@ -198,97 +199,97 @@ func (s *ExecutionState) updateLocalState(update client.OperationUpdate) {
 }
 
 // applyUpdate applies an update to an existing operation.
-func (s *ExecutionState) applyUpdate(op client.Operation, update client.OperationUpdate) client.Operation {
+func (s *ExecutionState) applyUpdate(op types.Operation, update types.OperationUpdate) types.Operation {
 	// Update status based on action
 	switch update.Action {
-	case client.OperationActionStart:
-		op.Status = client.OperationStatusStarted
-	case client.OperationActionSucceed:
-		op.Status = client.OperationStatusSucceeded
-	case client.OperationActionFail:
-		op.Status = client.OperationStatusFailed
-	case client.OperationActionRetry:
-		op.Status = client.OperationStatusPending
-	case client.OperationActionCancel:
-		op.Status = client.OperationStatusCancelled
+	case types.OperationActionStart:
+		op.Status = types.OperationStatusStarted
+	case types.OperationActionSucceed:
+		op.Status = types.OperationStatusSucceeded
+	case types.OperationActionFail:
+		op.Status = types.OperationStatusFailed
+	case types.OperationActionRetry:
+		op.Status = types.OperationStatusPending
+	case types.OperationActionCancel:
+		op.Status = types.OperationStatusCancelled
 	}
 
 	// Map Payload/Error to the appropriate Details field
 	if update.Payload != nil {
 		switch update.Type {
-		case client.OperationTypeStep:
+		case types.OperationTypeStep:
 			if op.StepDetails == nil {
-				op.StepDetails = &client.StepDetails{}
+				op.StepDetails = &types.StepDetails{}
 			}
 			op.StepDetails.Result = update.Payload
-		case client.OperationTypeChainedInvoke:
+		case types.OperationTypeChainedInvoke:
 			if op.ChainedInvokeDetails == nil {
-				op.ChainedInvokeDetails = &client.ChainedInvokeDetails{}
+				op.ChainedInvokeDetails = &types.ChainedInvokeDetails{}
 			}
 			op.ChainedInvokeDetails.Result = update.Payload
-		case client.OperationTypeContext:
+		case types.OperationTypeContext:
 			if op.ContextDetails == nil {
-				op.ContextDetails = &client.ContextDetails{}
+				op.ContextDetails = &types.ContextDetails{}
 			}
 			op.ContextDetails.Result = update.Payload
-		case client.OperationTypeCallback:
+		case types.OperationTypeCallback:
 			if op.CallbackDetails == nil {
-				op.CallbackDetails = &client.CallbackDetails{}
+				op.CallbackDetails = &types.CallbackDetails{}
 			}
 			op.CallbackDetails.Result = update.Payload
 		}
 	}
 	if update.Error != nil {
 		switch update.Type {
-		case client.OperationTypeStep:
+		case types.OperationTypeStep:
 			if op.StepDetails == nil {
-				op.StepDetails = &client.StepDetails{}
+				op.StepDetails = &types.StepDetails{}
 			}
 			op.StepDetails.Error = update.Error
-		case client.OperationTypeChainedInvoke:
+		case types.OperationTypeChainedInvoke:
 			if op.ChainedInvokeDetails == nil {
-				op.ChainedInvokeDetails = &client.ChainedInvokeDetails{}
+				op.ChainedInvokeDetails = &types.ChainedInvokeDetails{}
 			}
 			op.ChainedInvokeDetails.Error = update.Error
-		case client.OperationTypeContext:
+		case types.OperationTypeContext:
 			if op.ContextDetails == nil {
-				op.ContextDetails = &client.ContextDetails{}
+				op.ContextDetails = &types.ContextDetails{}
 			}
 			op.ContextDetails.Error = update.Error
-		case client.OperationTypeCallback:
+		case types.OperationTypeCallback:
 			if op.CallbackDetails == nil {
-				op.CallbackDetails = &client.CallbackDetails{}
+				op.CallbackDetails = &types.CallbackDetails{}
 			}
 			op.CallbackDetails.Error = update.Error
 		}
 	}
 	if update.WaitOptions != nil && update.WaitOptions.WaitSeconds != nil {
 		t := time.Now().Add(time.Duration(*update.WaitOptions.WaitSeconds) * time.Second)
-		op.WaitDetails = &client.WaitDetails{ScheduledEndTimestamp: &t}
+		op.WaitDetails = &types.WaitDetails{ScheduledEndTimestamp: &t}
 	}
 
 	return op
 }
 
 // createOperationFromUpdate creates a new operation from an update.
-func (s *ExecutionState) createOperationFromUpdate(update client.OperationUpdate) client.Operation {
-	var status client.OperationStatus
+func (s *ExecutionState) createOperationFromUpdate(update types.OperationUpdate) types.Operation {
+	var status types.OperationStatus
 	switch update.Action {
-	case client.OperationActionStart:
-		status = client.OperationStatusStarted
-	case client.OperationActionSucceed:
-		status = client.OperationStatusSucceeded
-	case client.OperationActionFail:
-		status = client.OperationStatusFailed
-	case client.OperationActionRetry:
-		status = client.OperationStatusPending
-	case client.OperationActionCancel:
-		status = client.OperationStatusCancelled
+	case types.OperationActionStart:
+		status = types.OperationStatusStarted
+	case types.OperationActionSucceed:
+		status = types.OperationStatusSucceeded
+	case types.OperationActionFail:
+		status = types.OperationStatusFailed
+	case types.OperationActionRetry:
+		status = types.OperationStatusPending
+	case types.OperationActionCancel:
+		status = types.OperationStatusCancelled
 	default:
-		status = client.OperationStatusStarted
+		status = types.OperationStatusStarted
 	}
 
-	op := client.Operation{
+	op := types.Operation{
 		Id:       update.Id,
 		Name:     update.Name,
 		Type:     update.Type,
@@ -300,43 +301,43 @@ func (s *ExecutionState) createOperationFromUpdate(update client.OperationUpdate
 	// Map Payload/Error to the appropriate Details field
 	if update.Payload != nil {
 		switch update.Type {
-		case client.OperationTypeStep:
-			op.StepDetails = &client.StepDetails{Result: update.Payload}
-		case client.OperationTypeChainedInvoke:
-			op.ChainedInvokeDetails = &client.ChainedInvokeDetails{Result: update.Payload}
-		case client.OperationTypeContext:
-			op.ContextDetails = &client.ContextDetails{Result: update.Payload}
-		case client.OperationTypeCallback:
-			op.CallbackDetails = &client.CallbackDetails{Result: update.Payload}
+		case types.OperationTypeStep:
+			op.StepDetails = &types.StepDetails{Result: update.Payload}
+		case types.OperationTypeChainedInvoke:
+			op.ChainedInvokeDetails = &types.ChainedInvokeDetails{Result: update.Payload}
+		case types.OperationTypeContext:
+			op.ContextDetails = &types.ContextDetails{Result: update.Payload}
+		case types.OperationTypeCallback:
+			op.CallbackDetails = &types.CallbackDetails{Result: update.Payload}
 		}
 	}
 	if update.Error != nil {
 		switch update.Type {
-		case client.OperationTypeStep:
+		case types.OperationTypeStep:
 			if op.StepDetails == nil {
-				op.StepDetails = &client.StepDetails{}
+				op.StepDetails = &types.StepDetails{}
 			}
 			op.StepDetails.Error = update.Error
-		case client.OperationTypeChainedInvoke:
+		case types.OperationTypeChainedInvoke:
 			if op.ChainedInvokeDetails == nil {
-				op.ChainedInvokeDetails = &client.ChainedInvokeDetails{}
+				op.ChainedInvokeDetails = &types.ChainedInvokeDetails{}
 			}
 			op.ChainedInvokeDetails.Error = update.Error
-		case client.OperationTypeContext:
+		case types.OperationTypeContext:
 			if op.ContextDetails == nil {
-				op.ContextDetails = &client.ContextDetails{}
+				op.ContextDetails = &types.ContextDetails{}
 			}
 			op.ContextDetails.Error = update.Error
-		case client.OperationTypeCallback:
+		case types.OperationTypeCallback:
 			if op.CallbackDetails == nil {
-				op.CallbackDetails = &client.CallbackDetails{}
+				op.CallbackDetails = &types.CallbackDetails{}
 			}
 			op.CallbackDetails.Error = update.Error
 		}
 	}
 	if update.WaitOptions != nil && update.WaitOptions.WaitSeconds != nil {
 		t := time.Now().Add(time.Duration(*update.WaitOptions.WaitSeconds) * time.Second)
-		op.WaitDetails = &client.WaitDetails{ScheduledEndTimestamp: &t}
+		op.WaitDetails = &types.WaitDetails{ScheduledEndTimestamp: &t}
 	}
 
 	return op
@@ -346,7 +347,7 @@ func (s *ExecutionState) createOperationFromUpdate(update client.OperationUpdate
 func (s *ExecutionState) processCheckpoints(ctx context.Context) {
 	defer s.checkpointWaitGroup.Done()
 
-	batch := make([]client.OperationUpdate, 0, 10)
+	batch := make([]types.OperationUpdate, 0, 10)
 	ticker := checkpoint.NewTicker()
 	defer ticker.Stop()
 
@@ -380,7 +381,7 @@ func (s *ExecutionState) processCheckpoints(ctx context.Context) {
 }
 
 // flushBatch sends a batch of updates to Lambda.
-func (s *ExecutionState) flushBatch(ctx context.Context, batch []client.OperationUpdate) {
+func (s *ExecutionState) flushBatch(ctx context.Context, batch []types.OperationUpdate) {
 	if len(batch) == 0 {
 		return
 	}
