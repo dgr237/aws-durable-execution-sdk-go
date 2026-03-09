@@ -71,6 +71,26 @@ func (e *CallbackError) Error() string {
 	return fmt.Sprintf("CallbackError: %s", e.DurableError.Error())
 }
 
+// ParallelError is returned when a parallel step fails, times out, or is rejected.
+type ParallelError struct {
+	*DurableError
+}
+
+func NewParallelError(operationID string, name *string, cause error) *CallbackError {
+	return &CallbackError{
+		DurableError: &DurableError{
+			Message:       "callback failed",
+			OperationID:   operationID,
+			OperationName: name,
+			Cause:         cause,
+		},
+	}
+}
+
+func (e *ParallelError) Error() string {
+	return fmt.Sprintf("CallbackError: %s", e.DurableError.Error())
+}
+
 // ChildContextError is returned when a child context function fails.
 type ChildContextError struct {
 	*DurableError

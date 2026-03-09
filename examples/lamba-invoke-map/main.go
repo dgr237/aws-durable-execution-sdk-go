@@ -18,9 +18,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable"
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/context"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/operations"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 )
 
@@ -53,34 +52,33 @@ func main() {
 	lambda.Start(durable.WithDurableExecution[Event, MainResult](mainHandler, nil))
 }
 
-func mainHandler(event Event, durableCtx *context.DurableContext) (MainResult, error) {
+func mainHandler(event Event, durableCtx types.DurableContext) (MainResult, error) {
 	startTime := getStartTime(durableCtx)
 
-	result, err := context.Step(durableCtx, "initialize-tasks", initializeFn, &types.StepConfig{})
+	result, err := operations.Step(durableCtx, "initialize-tasks", initializeFn)
 	if err != nil {
 		return MainResult{}, fmt.Errorf("initialization failed: %w", err)
 	}
 
-	mapResult, err := context.Map(
+	mapResult, err := operations.Map(
 		durableCtx,
 		"process-tasks",
 		result,
 		runTaskFn,
-		&types.MapConfig{MaxConcurrency: 3, CompletionConfig: &types.BatchCompletionConfig{ToleratedFailurePercentage: aws.Float64(0)}},
-	)
+		operations.WithMapMaxConcurrency[TaskInput, TaskResult](3))
 	if err != nil {
 		return MainResult{}, fmt.Errorf("map operation failed: %w", err)
 	}
 
-	res, err := context.Step[MainResult](durableCtx, "get-results", aggregateResultsFn(startTime, mapResult), &types.StepConfig{})
+	res, err := operations.Step[MainResult](durableCtx, "get-results", aggregateResultsFn(startTime, mapResult))
 	if err != nil {
 		return MainResult{}, fmt.Errorf("failed to get results: %w", err)
 	}
 	return res, nil
 }
 
-func getStartTime(durableCtx *context.DurableContext) time.Time {
-	startTime, _ := context.Step(durableCtx, "start-time", func(ctx types.StepContext) (time.Time, error) {
+func getStartTime(durableCtx types.DurableContext) time.Time {
+	startTime, _ := operations.Step(durableCtx, "start-time", func(ctx types.StepContext) (time.Time, error) {
 		durableCtx.Logger().Info("Starting main execution")
 		return time.Now(), nil
 	}, nil)
@@ -105,7 +103,7 @@ func initializeFn(stepCtx types.StepContext) ([]TaskInput, error) {
 	return taskConfigs, nil
 }
 
-func runTaskFn(ctx *context.DurableContext, taskInput TaskInput, index int, items []TaskInput) (TaskResult, error) {
+func runTaskFn(ctx types.DurableContext, taskInput TaskInput, index int, items []TaskInput) (TaskResult, error) {
 	ctx.Logger().Info("Processing task %d with %d ms wait", taskInput.TaskNumber, taskInput.WaitTimeMs)
 
 	// Get task Lambda ARN from environment variable (should be qualified ARN)
@@ -122,11 +120,11 @@ func runTaskFn(ctx *context.DurableContext, taskInput TaskInput, index int, item
 	// INVOKE SEPARATE TASK LAMBDA
 	// Use static invoke name - NO execID!
 	invokeName := fmt.Sprintf("invoke-task-%d", taskInput.TaskNumber)
-	taskResult, err := context.Invoke[TaskInput, TaskResult](
+	taskResult, err := operations.Invoke[TaskInput, TaskResult](
 		ctx,
-		invokeName,                       // Static name per task number
-		taskLambdaArn,                    // Qualified ARN
-		taskInput, &types.InvokeConfig{}) // Send TaskInput to task Lambda
+		invokeName,    // Static name per task number
+		taskLambdaArn, // Qualified ARN
+		taskInput)     // Send TaskInput to task Lambda
 	if err != nil {
 		return TaskResult{}, fmt.Errorf("lambda invocation failed: %w", err)
 	}

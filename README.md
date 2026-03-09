@@ -25,7 +25,9 @@ The SDK enables developers to write multi-step, fault-tolerant Lambda functions 
 go get github.com/aws/durable-execution-sdk-go
 ```
 
----
+**Requirements:**
+- Go 1.21 or later (tested with Go 1.21+)
+- AWS Lambda execution environment with Durable Execution enabled
 
 ## Quick Start
 
@@ -33,9 +35,13 @@ go get github.com/aws/durable-execution-sdk-go
 package main
 
 import (
+    "fmt"
+
     "github.com/aws/aws-lambda-go/lambda"
-    durable "github.com/aws/durable-execution-sdk-go"
-    "github.com/aws/durable-execution-sdk-go/types"
+    durable "github.com/aws/durable-execution-sdk-go/pkg/durable"
+    "github.com/aws/durable-execution-sdk-go/pkg/durable/operations"
+    "github.com/aws/durable-execution-sdk-go/pkg/durable/types"
+    "github.com/aws/durable-execution-sdk-go/pkg/durable/utils"
 )
 
 type OrderEvent struct {
@@ -50,15 +56,17 @@ type OrderResult struct {
 
 var handler = durable.WithDurableExecution(func(event OrderEvent, ctx types.DurableContext) (OrderResult, error) {
     // Step 1: Validate order (retried automatically on failure)
-    validatedRaw, err := ctx.Step("validate-order", func(sc types.StepContext) (any, error) {
+    validatedRaw, err := operations.Step(ctx, "validate-order", func(sc types.StepContext) (any, error) {
         return validateOrder(event)
-    }, nil)
+    }, &types.StepConfig{
+        RetryStrategy: utils.Presets.ExponentialBackoff(),
+    })
     if err != nil {
         return OrderResult{}, err
     }
 
     // Step 2: Wait for payment approval from an external system
-    _, err = ctx.WaitForCallback("payment-approval", func(sc types.StepContext, callbackID string) error {
+    _, err = operations.WaitForCallback[any](ctx, "payment-approval", func(sc types.StepContext, callbackID string) error {
         return sendPaymentRequest(event.UserID, event.Amount, callbackID)
     }, &types.WaitForCallbackConfig{
         Timeout: &types.Duration{Hours: 1},
@@ -68,7 +76,7 @@ var handler = durable.WithDurableExecution(func(event OrderEvent, ctx types.Dura
     }
 
     // Step 3: Confirm the order
-    orderIDRaw, err := ctx.Step("confirm-order", func(sc types.StepContext) (any, error) {
+    orderIDRaw, err := operations.Step(ctx, "confirm-order", func(sc types.StepContext) (any, error) {
         return confirmOrder(validatedRaw)
     }, nil)
     if err != nil {
@@ -329,8 +337,8 @@ func (m *mockClient) Checkpoint(r types.CheckpointDurableExecutionRequest) (*typ
     return &types.CheckpointDurableExecutionResponse{NextCheckpointToken: &token}, nil
 }
 
-func (m *mockClient) GetExecutionState(r types.GetDurableExecutionStateRequest) (*types.GetDurableExecutionStateResponse, error) {
-    return &types.GetDurableExecutionStateResponse{}, nil
+func (m *mockClient) CheckpointToken() string {
+    return "test-token"
 }
 
 // In your test:
@@ -344,6 +352,7 @@ handler := durable.WithDurableExecution(myHandler, &durable.Config{Client: mock}
 
 | Feature | TypeScript | Go |
 |---------|-----------|-----|
+| Operations API | Methods on context (e.g., `ctx.step()`) | Functions in `operations` package (e.g., `operations.Step()`) |
 | Generic types | `DurableContext<TLogger>` | `types.DurableContext` interface |
 | Async model | Promises / async-await | Goroutines + channels |
 | Replay suspension | JS event loop | `select {}` + goroutine |
@@ -356,22 +365,140 @@ handler := durable.WithDurableExecution(myHandler, &durable.Config{Client: mock}
 ## Architecture
 
 ```
-durable.go                 # WithDurableExecution entry point
-├── types/types.go         # All public types and interfaces
+pkg/durable/
+├── durable.go                     # WithDurableExecution entry point
+├── types/types.go                 # All public types and interfaces
+├── operations/                    # Durable operations API
+│   ├── step.go                    # Step operation
+│   ├── wait.go                    # Wait operation
+│   ├── wait_for_callback.go       # WaitForCallback operation
+│   ├── wait_for_condition.go      # WaitForCondition operation
+│   ├── create_callback.go         # CreateCallback operation
+│   ├── invoke.go                  # Invoke operation
+│   ├── run_in_child_context.go    # RunInChildContext operation
+│   ├── map.go                     # Map batch operation
+│   └── parallel.go                # Parallel batch operation
 ├── context/
-│   ├── execution_context.go   # Builds ExecutionContext from invocation input
-│   ├── durable_context.go     # DurableContext implementation (step, wait, parallel, etc.)
-│   ├── step_id.go             # Hierarchical step ID generation and replay validation
-│   └── factory.go             # NewRootContext constructor
+│   ├── durable_context.go         # DurableContext implementation
+│   ├── execution_context.go       # Builds ExecutionContext from invocation input
+│   ├── step_id.go                 # Hierarchical step ID generation and replay validation
+│   └── factory.go                 # NewRootContext constructor
 ├── checkpoint/
-│   ├── manager.go         # Checkpoint batching and queue management
-│   └── termination.go     # TerminationManager lifecycle coordination
+│   ├── manager.go                 # Checkpoint batching and queue management
+│   └── termination.go             # TerminationManager lifecycle coordination
 ├── client/
-│   └── client.go          # AWS Lambda client adapter
+│   └── client.go                  # AWS Lambda client adapter
 ├── errors/
-│   └── errors.go          # SDK error types
+│   └── errors.go                  # SDK error types
 └── utils/
-    ├── serdes.go           # Default JSON Serdes + helpers
-    ├── logger.go           # DefaultLogger, ModeAwareLogger, NopLogger
-    └── retry.go            # RetryStrategyConfig + presets
+    ├── serdes.go                   # Default JSON Serdes + helpers
+    ├── logger.go                   # DefaultLogger, ModeAwareLogger, NopLogger
+    └── retry.go                    # RetryStrategyConfig + presets
 ```
+
+---
+
+## Configuration and Deployment
+
+### Lambda Function Requirements
+
+Your Lambda function must be configured with:
+
+1. **Durable Execution enabled** via AWS Console, CLI, or IaC
+2. **Qualified ARN**: Deploy with version or alias (not `$LATEST`)
+3. **IAM Permissions**: Lambda execution role needs:
+   ```json
+   {
+     "Effect": "Allow",
+     "Action": [
+       "lambda:CheckpointDurableExecution",
+       "lambda:GetDurableExecutionState"
+     ],
+     "Resource": "*"
+   }
+   ```
+
+4. **For cross-Lambda invocation**, also add:
+   ```json
+   {
+     "Effect": "Allow",
+     "Action": "lambda:InvokeFunction",
+     "Resource": "arn:aws:lambda:*:*:function:*"
+   }
+   ```
+
+### Environment Configuration
+
+The SDK automatically detects Lambda environment. No additional configuration needed for most cases.
+
+**Custom logger:**
+```go
+ctx.ConfigureLogger(types.LoggerConfig{
+    CustomLogger: myLogger,
+    ModeAware:    aws.Bool(true), // Suppress logs during replay
+})
+```
+
+**Custom client (for testing):**
+```go
+handler := durable.WithDurableExecution(myHandler, &durable.Config{
+    Client: mockClient,
+})
+```
+
+### Container Image Deployment
+
+The SDK works with both ZIP and container image deployments:
+
+```dockerfile
+FROM public.ecr.aws/lambda/go:1.24
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN go build -o main
+
+CMD ["main"]
+```
+
+---
+
+## Examples
+
+See the [`examples/`](./examples/) directory for complete working examples:
+
+- **[order-processing](./examples/order_processing/)**: End-to-end order workflow with steps, callbacks, and parallel processing
+- **[lambda-invoke-map](./examples/lamba-invoke-map/)**: Cross-Lambda orchestration with Map for fan-out processing
+
+---
+
+## Contributing
+
+Contributions are welcome! Please ensure:
+
+1. All tests pass: `go test ./...`
+2. Code is formatted: `go fmt ./...`
+3. Linter passes: `golangci-lint run`
+4. New features include tests and documentation
+
+---
+
+## License
+
+This SDK is distributed under the Apache License, Version 2.0. See [LICENSE](./LICENSE) for more information.
+
+---
+
+## Resources
+
+- [AWS Lambda Durable Execution Documentation](https://docs.aws.amazon.com/lambda/latest/dg/durable-execution.html)
+- [TypeScript SDK (Reference Implementation)](https://github.com/aws/aws-durable-execution-sdk-js)
+- [AWS Lambda Developer Guide](https://docs.aws.amazon.com/lambda/latest/dg/)
+
+---
+
+## Support
+
+For issues, questions, or contributions, please open an issue on GitHub.
+

@@ -6,7 +6,7 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambda"
 	durable "github.com/aws/durable-execution-sdk-go/pkg/durable"
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/context"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/operations"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/utils"
 )
@@ -62,15 +62,14 @@ func sendConfirmationEmail(orderID string, userID string) error {
 
 // durableHandler is the business logic wrapped in a durable execution handler.
 // The DurableContext provides all durable operations.
-var durableHandler = func(event OrderEvent, durableCtx *context.DurableContext) (OrderResult, error) {
+var durableHandler = func(event OrderEvent, durableCtx types.DurableContext) (OrderResult, error) {
 	durableCtx.Logger().Info("Starting order processing", "userId", event.UserID)
 
 	// Step 1: Validate the order (retried up to 3 times on failure)
-	validatedRaw, err := context.Step(durableCtx, "validate-order", func(stepCtx types.StepContext) (any, error) {
+	validatedRaw, err := operations.Step(durableCtx, "validate-order", func(stepCtx types.StepContext) (any, error) {
 		return validateOrder(event)
-	}, &types.StepConfig{
-		RetryStrategy: utils.Presets.ExponentialBackoff(),
-	})
+	}, operations.WithStepRetryStrategy[any](utils.Presets.ExponentialBackoff()),
+	)
 	if err != nil {
 		return OrderResult{}, fmt.Errorf("validation failed: %w", err)
 	}
@@ -82,16 +81,15 @@ var durableHandler = func(event OrderEvent, durableCtx *context.DurableContext) 
 		anyItems[i] = item
 	}
 
-	batchResults, err := context.Map(durableCtx,
+	batchResults, err := operations.Map(durableCtx,
 		"process-items",
 		anyItems,
-		func(child *context.DurableContext, itemRaw any, index int, _ []any) (any, error) {
+		func(child types.DurableContext, itemRaw any, index int, _ []any) (any, error) {
 			item := itemRaw.(Item)
-			return context.Step(durableCtx, fmt.Sprintf("process-item-%d", index), func(stepCtx types.StepContext) (any, error) {
+			return operations.Step(durableCtx, fmt.Sprintf("process-item-%d", index), func(stepCtx types.StepContext) (any, error) {
 				return processItem(item)
 			}, nil)
-		},
-		&types.MapConfig{MaxConcurrency: 3},
+		}, operations.WithMapMaxConcurrency[any, any](3),
 	)
 	if err != nil {
 		return OrderResult{}, fmt.Errorf("item processing failed: %w", err)
@@ -106,35 +104,28 @@ var durableHandler = func(event OrderEvent, durableCtx *context.DurableContext) 
 	}
 
 	// Step 3: Wait for human approval via external callback (1 hour timeout)
-	_, err = durableCtx.WaitForCallback(
+	_, err = operations.WaitForCallback[any](durableCtx,
 		"payment-approval",
 		func(sc types.StepContext, callbackID string) error {
 			return sendPaymentRequest(event.UserID, event.Amount, callbackID)
-		},
-		&types.WaitForCallbackConfig{
-			Timeout: &types.Duration{Hours: 1},
-		},
-	)
+		}, operations.WithWaitForCallbackTimeout[any](types.Duration{Hours: 1}))
 	if err != nil {
 		return OrderResult{}, fmt.Errorf("payment approval failed: %w", err)
 	}
 
 	// Step 4: Charge payment (at-most-once semantics — do not double-charge!)
-	paymentIDRaw, err := context.Step(durableCtx, "charge-payment", func(sc types.StepContext) (any, error) {
+	paymentIDRaw, err := operations.Step(durableCtx, "charge-payment", func(sc types.StepContext) (any, error) {
 		return chargePayment(validatedOrderID, event.Amount)
-	}, &types.StepConfig{
-		Semantics:     types.StepSemanticsAtMostOncePerRetry,
-		RetryStrategy: utils.Presets.NoRetry(),
-	})
+	}, operations.WithStepSemantics[any](types.StepSemanticsAtMostOncePerRetry), operations.WithStepRetryStrategy[any](utils.Presets.NoRetry()))
 	if err != nil {
 		return OrderResult{}, fmt.Errorf("payment failed: %w", err)
 	}
 
 	// Step 5: Wait 5 seconds before sending confirmation (demonstrating Wait)
-	_ = context.Wait(durableCtx, "pre-email-delay", types.Duration{Seconds: 5})
+	_ = operations.Wait(durableCtx, "pre-email-delay", types.Duration{Seconds: 5})
 
 	// Step 6: Send confirmation email (inside a step so it doesn't replay)
-	_, err = context.Step(durableCtx, "send-confirmation", func(sc types.StepContext) (any, error) {
+	_, err = operations.Step(durableCtx, "send-confirmation", func(sc types.StepContext) (any, error) {
 		return nil, sendConfirmationEmail(paymentIDRaw.(string), event.UserID)
 	}, nil)
 	if err != nil {

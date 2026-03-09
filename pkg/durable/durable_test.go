@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/aws/durable-execution-sdk-go/pkg/durable"
-	durableCtx "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/operations"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 )
 
@@ -88,10 +88,10 @@ func TestWithDurableExecution_SimpleStep_FirstInvocation(t *testing.T) {
 	type Evt struct{ Name string }
 	type Res struct{ Greeting string }
 
-	handler := durable.WithDurableExecution(func(event Evt, ctx *durableCtx.DurableContext) (Res, error) {
-		raw, err := durableCtx.Step(ctx, "greet", func(sc types.StepContext) (any, error) {
+	handler := durable.WithDurableExecution(func(event Evt, ctx types.DurableContext) (Res, error) {
+		raw, err := operations.Step(ctx, "greet", func(sc types.StepContext) (any, error) {
 			return "Hello, " + event.Name, nil
-		}, nil)
+		})
 		if err != nil {
 			return Res{}, err
 		}
@@ -143,11 +143,11 @@ func TestWithDurableExecution_StepReplay(t *testing.T) {
 	type Res struct{ Value string }
 
 	stepExecuted := false
-	handler := durable.WithDurableExecution(func(event Evt, ctx *durableCtx.DurableContext) (Res, error) {
-		raw, err := durableCtx.Step(ctx, "", func(sc types.StepContext) (any, error) {
+	handler := durable.WithDurableExecution(func(event Evt, ctx types.DurableContext) (Res, error) {
+		raw, err := operations.Step(ctx, "", func(sc types.StepContext) (any, error) {
 			stepExecuted = true
 			return "fresh-value", nil
-		}, nil)
+		})
 		if err != nil {
 			return Res{}, err
 		}
@@ -171,7 +171,7 @@ func TestWithDurableExecution_StepReplay(t *testing.T) {
 }
 
 func TestWithDurableExecution_InvalidEvent(t *testing.T) {
-	handler := durable.WithDurableExecution(func(event any, ctx *durableCtx.DurableContext) (any, error) {
+	handler := durable.WithDurableExecution(func(event any, ctx types.DurableContext) (any, error) {
 		return nil, nil
 	}, &durable.Config{Client: newMockClient()})
 
@@ -195,17 +195,17 @@ func TestWithDurableExecution_MultipleSteps(t *testing.T) {
 		Step2 string
 	}
 
-	handler := durable.WithDurableExecution(func(event Evt, ctx *durableCtx.DurableContext) (Res, error) {
-		s1, err := durableCtx.Step(ctx, "step-1", func(sc types.StepContext) (any, error) {
+	handler := durable.WithDurableExecution(func(event Evt, ctx types.DurableContext) (Res, error) {
+		s1, err := operations.Step(ctx, "step-1", func(sc types.StepContext) (any, error) {
 			return "result-1", nil
-		}, nil)
+		})
 		if err != nil {
 			return Res{}, err
 		}
 
-		s2, err := durableCtx.Step(ctx, "step-2", func(sc types.StepContext) (any, error) {
+		s2, err := operations.Step(ctx, "step-2", func(sc types.StepContext) (any, error) {
 			return "result-2", nil
-		}, nil)
+		})
 		if err != nil {
 			return Res{}, err
 		}
@@ -234,10 +234,10 @@ func TestWithDurableExecution_StepError(t *testing.T) {
 	mock := newMockClient()
 	type Evt struct{}
 
-	handler := durable.WithDurableExecution(func(event Evt, ctx *durableCtx.DurableContext) (string, error) {
-		_, err := durableCtx.Step(ctx, "failing-step", func(sc types.StepContext) (any, error) {
+	handler := durable.WithDurableExecution(func(event Evt, ctx types.DurableContext) (string, error) {
+		_, err := operations.Step(ctx, "failing-step", func(sc types.StepContext) (any, error) {
 			return nil, fmt.Errorf("intentional failure")
-		}, nil) // no retry
+		}) // no retry
 		if err != nil {
 			return "", err
 		}
@@ -258,12 +258,12 @@ func TestWithDurableExecution_ChildContext(t *testing.T) {
 	type Evt struct{}
 	type Res struct{ Combined string }
 
-	handler := durable.WithDurableExecution(func(event Evt, ctx *durableCtx.DurableContext) (Res, error) {
-		raw, err := durableCtx.RunInChildContext(ctx, "group", func(child *durableCtx.DurableContext) (any, error) {
-			s1, _ := durableCtx.Step(child, "a", func(sc types.StepContext) (any, error) { return "A", nil }, nil)
-			s2, _ := durableCtx.Step(child, "b", func(sc types.StepContext) (any, error) { return "B", nil }, nil)
+	handler := durable.WithDurableExecution(func(event Evt, ctx types.DurableContext) (Res, error) {
+		raw, err := operations.RunInChildContext(ctx, "group", func(child types.DurableContext) (any, error) {
+			s1, _ := operations.Step(child, "a", func(sc types.StepContext) (any, error) { return "A", nil })
+			s2, _ := operations.Step(child, "b", func(sc types.StepContext) (any, error) { return "B", nil })
 			return s1.(string) + s2.(string), nil
-		}, nil)
+		})
 		if err != nil {
 			return Res{}, err
 		}

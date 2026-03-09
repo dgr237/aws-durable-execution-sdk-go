@@ -1,7 +1,10 @@
 // Package types defines the core data types for the AWS Durable Execution SDK for Go.
 package types
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // DurableExecutionMode represents the current execution mode of the durable function.
 type DurableExecutionMode string
@@ -502,20 +505,31 @@ type callbackOutcome[T any] struct {
 type DurableContext interface {
 	// LambdaCtx returns the underlying Lambda context.
 	LambdaCtx() *LambdaContext
-
-	// ExecutionArn returns the ARN of the current durable execution.
-	ExecutionArn() string
-
+	Context() context.Context
 	// Logger returns the logger for this context (mode-aware; silent during replay).
 	Logger() Logger
-
 	// ConfigureLogger updates logger configuration.
 	ConfigureLogger(config LoggerConfig)
+
+	NextStepID() string
+	Checkpoint(stepID string, update OperationUpdate) error
+	CheckpointBatch(batch []OperationUpdate) error
+	ParentID() string
+	NewChildDurableContext(prefix string, parentID string, mode DurableExecutionMode) DurableContext
+	Mode() DurableExecutionMode
+	MarkOperationState(stepID string, state OperationLifecycleState, metadata OperationMetadata)
+	MarkAncestorFinished(stepID string)
+	NewStepContext() StepContext
+	IsTerminated() bool
+	Terminate(result TerminationResult)
+	GetStepData(stepID string) *Operation
+	DurableExecutionArn() string
 }
 
 // StepContext is passed to step functions for logging (not full durable operations).
 type StepContext interface {
 	Logger() Logger
+	Context() context.Context
 }
 
 // StepResult is a typed result channel item from a durable operation.

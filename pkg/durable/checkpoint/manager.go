@@ -27,12 +27,6 @@ const (
 	maxItemsInBatch = 250
 )
 
-// Client is the interface for communicating with the durable execution backend.
-type Client interface {
-	Checkpoint(ctx context.Context, params types.CheckpointDurableExecutionRequest) (*types.CheckpointDurableExecutionResponse, error)
-	GetExecutionState(params types.GetDurableExecutionStateRequest) (*types.GetDurableExecutionStateResponse, error)
-}
-
 type queuedCheckpoint struct {
 	stepID string
 	data   types.OperationUpdate
