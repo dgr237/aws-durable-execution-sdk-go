@@ -10,7 +10,7 @@ import (
 	awsConfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	lambdaTypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
-	"github.com/aws/durable-execution-sdk-go/types"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 )
 
 // LambdaClient wraps the AWS Lambda SDK client and implements the checkpoint.Client interface.

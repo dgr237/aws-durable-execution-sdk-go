@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/aws/durable-execution-sdk-go/types"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 )
 
 // RetryStrategyConfig configures the behavior of a retry strategy.

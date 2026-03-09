@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/aws/durable-execution-sdk-go/types"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 )
 
 // DefaultLogger is the built-in structured logger that emits JSON to stdout.

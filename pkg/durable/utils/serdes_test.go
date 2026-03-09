@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/aws/durable-execution-sdk-go/types"
-	"github.com/aws/durable-execution-sdk-go/utils"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/utils"
 )
 
 // ---------------------------------------------------------------------------

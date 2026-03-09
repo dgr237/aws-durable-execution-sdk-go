@@ -5,7 +5,7 @@ package checkpoint
 import (
 	"sync"
 
-	"github.com/aws/durable-execution-sdk-go/types"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 )
 
 // TerminationManager coordinates the termination lifecycle of a durable execution.

@@ -6,10 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/durable-execution-sdk-go/checkpoint"
-	durableErrors "github.com/aws/durable-execution-sdk-go/errors"
-	"github.com/aws/durable-execution-sdk-go/types"
-	"github.com/aws/durable-execution-sdk-go/utils"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/checkpoint"
+	durableErrors "github.com/aws/durable-execution-sdk-go/pkg/durable/errors"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/utils"
 )
 
 var _ types.DurableContext = (*DurableContext)(nil)

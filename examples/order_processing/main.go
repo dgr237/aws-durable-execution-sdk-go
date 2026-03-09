@@ -5,10 +5,10 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-lambda-go/lambda"
-	durable "github.com/aws/durable-execution-sdk-go"
-	"github.com/aws/durable-execution-sdk-go/context"
-	"github.com/aws/durable-execution-sdk-go/types"
-	"github.com/aws/durable-execution-sdk-go/utils"
+	durable "github.com/aws/durable-execution-sdk-go/pkg/durable"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/context"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/utils"
 )
 
 // ---- Domain types ----------------------------------------------------------

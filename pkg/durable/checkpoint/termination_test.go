@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/durable-execution-sdk-go/checkpoint"
-	"github.com/aws/durable-execution-sdk-go/types"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/checkpoint"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 )
 
 func TestTerminationManager_TerminatesOnce(t *testing.T) {

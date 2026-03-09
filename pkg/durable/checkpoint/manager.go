@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	durableErrors "github.com/aws/durable-execution-sdk-go/errors"
-	"github.com/aws/durable-execution-sdk-go/types"
+	durableErrors "github.com/aws/durable-execution-sdk-go/pkg/durable/errors"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 )
 
 // hashID mirrors the JS SDK's hashId function (checkpoint-manager.ts):

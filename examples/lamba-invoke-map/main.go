@@ -19,9 +19,9 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/durable-execution-sdk-go"
-	"github.com/aws/durable-execution-sdk-go/context"
-	"github.com/aws/durable-execution-sdk-go/types"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/context"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 )
 
 // Event represents the input to the orchestrator Lambda function.

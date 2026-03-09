@@ -1,8 +1,8 @@
 package context
 
 import (
-	"github.com/aws/durable-execution-sdk-go/checkpoint"
-	"github.com/aws/durable-execution-sdk-go/types"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/checkpoint"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 )
 
 // NewRootContext creates a root-level DurableContext for use by the SDK entrypoint.
