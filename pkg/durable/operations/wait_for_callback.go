@@ -1,9 +1,10 @@
 package operations
 
 import (
+	"context"
 	"fmt"
 
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/context"
+	durableCtx "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
 	durableErrors "github.com/aws/durable-execution-sdk-go/pkg/durable/errors"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/utils"
@@ -17,7 +18,7 @@ type WaitForCallbackRunner[T any] struct {
 	d         types.DurableContext
 	name      string
 	namePtr   *string
-	submitter func(ctx types.StepContext, callbackID string) error
+	submitter func(ctx context.Context, callbackID string) error
 	serdes    types.Serdes
 	timeout   *types.Duration
 	subType   types.OperationSubType
@@ -27,7 +28,7 @@ type WaitForCallbackRunner[T any] struct {
 func newWaitForCallbackRunner[T any](
 	d types.DurableContext,
 	name string,
-	submitter func(ctx types.StepContext, callbackID string) error,
+	submitter func(ctx context.Context, callbackID string) error,
 	opts []WaitForCallbackOption[T],
 ) *WaitForCallbackRunner[T] {
 	r := &WaitForCallbackRunner[T]{
@@ -50,14 +51,25 @@ func newWaitForCallbackRunner[T any](
 // ---------------------------------------------------------------------------
 
 func WaitForCallback[T any](
-	d types.DurableContext,
+	ctx context.Context,
 	name string,
-	submitter func(ctx types.StepContext, callbackID string) error,
+	submitter func(ctx context.Context, callbackID string) error,
 	opts ...WaitForCallbackOption[T],
 ) (T, error) {
+	d := durableCtx.GetDurableContext(ctx)
 	r := newWaitForCallbackRunner[T](d, name, submitter, opts)
 
 	stored := r.d.GetStepData(r.stepID)
+
+	if err := durableCtx.ValidateReplayConsistency(r.stepID, types.OperationTypeCallback, r.namePtr, &r.subType, stored); err != nil {
+		r.d.Terminate(types.TerminationResult{
+			Reason:  types.TerminationReasonContextValidationError,
+			Error:   err,
+			Message: err.Error(),
+		})
+		var zero T
+		return zero, err
+	}
 
 	switch {
 	case stored != nil && stored.Status == types.OperationStatusSucceeded:
@@ -65,7 +77,7 @@ func WaitForCallback[T any](
 	case stored != nil && stored.Status == types.OperationStatusFailed:
 		return r.replayFailed(stored)
 	default:
-		return r.startFresh()
+		return r.startFresh(ctx)
 	}
 }
 
@@ -89,15 +101,17 @@ func (r *WaitForCallbackRunner[T]) replayFailed(stored *types.Operation) (T, err
 	return zero, durableErrors.NewCallbackError(r.stepID, r.namePtr, r.extractStoredError(stored))
 }
 
-func (r *WaitForCallbackRunner[T]) startFresh() (T, error) {
+func (r *WaitForCallbackRunner[T]) startFresh(ctx context.Context) (T, error) {
 	var zero T
 	callbackID := r.generateCallbackID()
 
-	if err := r.submitter(r.d.NewStepContext(), callbackID); err != nil {
+	// Build a step context for the submitter
+	stepCtxGo := durableCtx.NewStepContextFrom(ctx)
+	if err := r.submitter(stepCtxGo, callbackID); err != nil {
 		return zero, err
 	}
 
-	if err := r.d.Checkpoint(r.stepID, types.OperationUpdate{
+	if err := r.d.Checkpoint(ctx, r.stepID, types.OperationUpdate{
 		Id:              r.stepID,
 		Action:          types.OperationActionStart,
 		Type:            types.OperationTypeCallback,
@@ -142,7 +156,7 @@ func (r *WaitForCallbackRunner[T]) extractStoredError(stored *types.Operation) e
 }
 
 func (r *WaitForCallbackRunner[T]) generateCallbackID() string {
-	return fmt.Sprintf("cb-%s-%s", context.HashedStepID(r.stepID), utils.HashID(r.d.DurableExecutionArn()))
+	return fmt.Sprintf("cb-%s-%s", durableCtx.HashedStepID(r.stepID), utils.HashID(r.d.DurableExecutionArn()))
 }
 
 func (r *WaitForCallbackRunner[T]) callbackOptions() *types.CallbackOptions {

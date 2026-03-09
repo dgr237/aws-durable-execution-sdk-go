@@ -76,10 +76,10 @@ type ParallelError struct {
 	*DurableError
 }
 
-func NewParallelError(operationID string, name *string, cause error) *CallbackError {
-	return &CallbackError{
+func NewParallelError(operationID string, name *string, cause error) *ParallelError {
+	return &ParallelError{
 		DurableError: &DurableError{
-			Message:       "callback failed",
+			Message:       "parallel failed",
 			OperationID:   operationID,
 			OperationName: name,
 			Cause:         cause,
@@ -88,7 +88,7 @@ func NewParallelError(operationID string, name *string, cause error) *CallbackEr
 }
 
 func (e *ParallelError) Error() string {
-	return fmt.Sprintf("CallbackError: %s", e.DurableError.Error())
+	return fmt.Sprintf("ParallelError: %s", e.DurableError.Error())
 }
 
 // ChildContextError is returned when a child context function fails.
@@ -263,6 +263,22 @@ type TerminatedError struct {
 func (e *TerminatedError) Error() string {
 	return fmt.Sprintf("TerminatedError: %s", e.Message)
 }
+
+// AggregateError collects multiple errors from a batch operation.
+// Returned by combinators such as All and Any when all branches fail.
+type AggregateError struct {
+	Errors []error
+}
+
+func NewAggregateError(errs []error) *AggregateError {
+	return &AggregateError{Errors: errs}
+}
+
+func (e *AggregateError) Error() string {
+	return fmt.Sprintf("AggregateError: %d error(s): %v", len(e.Errors), e.Errors)
+}
+
+func (e *AggregateError) Unwrap() []error { return e.Errors }
 
 // ErrorFromObject creates a Go error from a serialized error object.
 func ErrorFromObject(msg string, cause error) error {

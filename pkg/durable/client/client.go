@@ -155,9 +155,9 @@ func convertToSDKErrorObject(err *types.ErrorObject) *lambdaTypes.ErrorObject {
 
 // GetExecutionState retrieves execution state from the Lambda durable execution service.
 // It uses the Lambda GetDurableExecutionState API.
-func (c *LambdaClient) GetExecutionState(params types.GetDurableExecutionStateRequest) (*types.GetDurableExecutionStateResponse, error) {
+func (c *LambdaClient) GetExecutionState(ctx context.Context, params types.GetDurableExecutionStateRequest) (*types.GetDurableExecutionStateResponse, error) {
 	// Call the AWS Lambda GetDurableExecutionState API
-	resp, err := c.lambda.GetDurableExecutionState(context.Background(), &lambda.GetDurableExecutionStateInput{
+	resp, err := c.lambda.GetDurableExecutionState(ctx, &lambda.GetDurableExecutionStateInput{
 		DurableExecutionArn: aws.String(params.DurableExecutionArn),
 		CheckpointToken:     aws.String(params.CheckpointToken),
 		Marker:              params.NextMarker,

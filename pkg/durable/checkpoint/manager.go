@@ -103,7 +103,7 @@ func (m *Manager) MarkOperationState(stepID string, state types.OperationLifecyc
 // because AWS resolves ParentId references within the same batch call.
 // If sent as separate calls, AWS rejects the child's ParentId because the parent
 // was registered in a prior call and AWS does not expose its internal operation IDs.
-func (m *Manager) CheckpointBatch(updates []types.OperationUpdate) error {
+func (m *Manager) CheckpointBatch(ctx context.Context, updates []types.OperationUpdate) error {
 	if len(updates) == 0 {
 		return nil
 	}
@@ -131,7 +131,7 @@ func (m *Manager) CheckpointBatch(updates []types.OperationUpdate) error {
 	m.mu.Unlock()
 
 	if needsStart {
-		go m.processQueue()
+		go m.processQueue(ctx)
 	}
 
 	// Wait for any one completion signal - since all share the same doneCh,
@@ -148,7 +148,7 @@ func (m *Manager) CheckpointBatch(updates []types.OperationUpdate) error {
 
 // Checkpoint queues a single operation update for persistence.
 // It returns once the checkpoint has been sent to the backend (or immediately if terminating).
-func (m *Manager) Checkpoint(stepID string, update types.OperationUpdate) error {
+func (m *Manager) Checkpoint(ctx context.Context, stepID string, update types.OperationUpdate) error {
 	m.mu.Lock()
 	if m.isTerminating {
 		m.mu.Unlock()
@@ -170,7 +170,7 @@ func (m *Manager) Checkpoint(stepID string, update types.OperationUpdate) error 
 	m.mu.Unlock()
 
 	if needsStart {
-		go m.processQueue()
+		go m.processQueue(ctx)
 	}
 
 	return <-doneCh
@@ -198,7 +198,7 @@ func (m *Manager) notifyDone() {
 	}
 }
 
-func (m *Manager) processQueue() {
+func (m *Manager) processQueue(ctx context.Context) {
 	m.mu.Lock()
 	if m.isProcessing {
 		m.mu.Unlock()
@@ -267,7 +267,7 @@ func (m *Manager) processQueue() {
 		}
 
 		// Send the checkpoint
-		resp, err := m.client.Checkpoint(context.Background(), types.CheckpointDurableExecutionRequest{
+		resp, err := m.client.Checkpoint(ctx, types.CheckpointDurableExecutionRequest{
 			DurableExecutionArn: m.durableExecutionArn,
 			CheckpointToken:     token,
 			Operations:          updates,

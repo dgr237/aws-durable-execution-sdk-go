@@ -1,8 +1,10 @@
 package operations
 
 import (
+	"context"
 	"fmt"
 
+	durableCtx "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 )
 
@@ -36,15 +38,26 @@ func newWaitRunner(d types.DurableContext, name string, duration types.Duration)
 // Wait — public entry point
 // ---------------------------------------------------------------------------
 
-func Wait(d types.DurableContext, name string, duration types.Duration) error {
+func Wait(ctx context.Context, name string, duration types.Duration) error {
+	d := durableCtx.GetDurableContext(ctx)
 	r := newWaitRunner(d, name, duration)
 
 	stored := r.d.GetStepData(r.stepID)
+
+	if err := durableCtx.ValidateReplayConsistency(r.stepID, types.OperationTypeStep, r.namePtr, &r.subType, stored); err != nil {
+		r.d.Terminate(types.TerminationResult{
+			Reason:  types.TerminationReasonContextValidationError,
+			Error:   err,
+			Message: err.Error(),
+		})
+		return err
+	}
+
 	if stored != nil && stored.Status == types.OperationStatusSucceeded {
 		return r.replaySucceeded()
 	}
 
-	return r.startFresh()
+	return r.startFresh(ctx)
 }
 
 // ---------------------------------------------------------------------------
@@ -58,10 +71,10 @@ func (r *WaitRunner) replaySucceeded() error {
 }
 
 // startFresh checkpoints the wait START then suspends until the timer elapses.
-func (r *WaitRunner) startFresh() error {
+func (r *WaitRunner) startFresh(ctx context.Context) error {
 	waitSeconds := int32(r.duration.ToSeconds())
 
-	if err := r.d.Checkpoint(r.stepID, types.OperationUpdate{
+	if err := r.d.Checkpoint(ctx, r.stepID, types.OperationUpdate{
 		Id:      r.stepID,
 		Action:  types.OperationActionStart,
 		Type:    types.OperationTypeStep,

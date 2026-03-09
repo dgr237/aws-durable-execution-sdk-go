@@ -1,9 +1,11 @@
 package operations
 
 import (
+	"context"
 	"fmt"
 	"time"
 
+	durableCtx "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
 	durableErrors "github.com/aws/durable-execution-sdk-go/pkg/durable/errors"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/utils"
@@ -17,7 +19,7 @@ type WaitForConditionRunner[TState any] struct {
 	d            types.DurableContext
 	name         string
 	namePtr      *string
-	checkFn      func(state TState, ctx types.StepContext) (TState, error)
+	checkFn      func(state TState, ctx context.Context) (TState, error)
 	initialState TState
 	serdes       types.Serdes
 	waitStrategy func(state TState, attempt int) types.WaitStrategyResult
@@ -28,7 +30,7 @@ type WaitForConditionRunner[TState any] struct {
 func newWaitForConditionRunner[TState any](
 	d types.DurableContext,
 	name string,
-	checkFn func(state TState, ctx types.StepContext) (TState, error),
+	checkFn func(state TState, ctx context.Context) (TState, error),
 	initialState TState,
 	opts []WaitForConditionOption[TState],
 ) *WaitForConditionRunner[TState] {
@@ -56,15 +58,26 @@ func newWaitForConditionRunner[TState any](
 // initialState is the required starting value for the condition state machine;
 // all other settings are provided via functional options.
 func WaitForCondition[TState any](
-	d types.DurableContext,
+	ctx context.Context,
 	name string,
-	checkFn func(state TState, ctx types.StepContext) (TState, error),
+	checkFn func(state TState, ctx context.Context) (TState, error),
 	initialState TState,
 	opts ...WaitForConditionOption[TState],
 ) (TState, error) {
+	d := durableCtx.GetDurableContext(ctx)
 	r := newWaitForConditionRunner[TState](d, name, checkFn, initialState, opts)
 
 	stored := r.d.GetStepData(r.childStepID)
+
+	if err := durableCtx.ValidateReplayConsistency(r.childStepID, types.OperationTypeStep, r.namePtr, &r.subType, stored); err != nil {
+		r.d.Terminate(types.TerminationResult{
+			Reason:  types.TerminationReasonContextValidationError,
+			Error:   err,
+			Message: err.Error(),
+		})
+		var zero TState
+		return zero, err
+	}
 
 	switch {
 	case stored != nil && stored.Status == types.OperationStatusSucceeded:
@@ -72,7 +85,7 @@ func WaitForCondition[TState any](
 	case stored != nil && stored.Status == types.OperationStatusFailed:
 		return r.replayFailed(stored)
 	default:
-		return r.poll()
+		return r.poll(ctx)
 	}
 }
 
@@ -97,35 +110,45 @@ func (r *WaitForConditionRunner[TState]) replayFailed(stored *types.Operation) (
 	return zero, durableErrors.NewWaitConditionError(r.childStepID, r.namePtr, cause)
 }
 
-// poll runs the condition check in a loop, sleeping between attempts until
-// the strategy says to stop or a check fails.
-func (r *WaitForConditionRunner[TState]) poll() (TState, error) {
+func (r *WaitForConditionRunner[TState]) poll(ctx context.Context) (TState, error) {
 	var zero TState
-	state := r.initialState
-	stepCtx := r.d.NewStepContext()
+
+	state := r.recoverState()
+	// Build a step context.Context from the durable context
+	stepCtxGo := durableCtx.NewStepContextFrom(ctx)
 
 	for attempt := 1; ; attempt++ {
-		newState, err := r.checkFn(state, stepCtx)
+		newState, err := r.checkFn(state, stepCtxGo)
 		if err != nil {
-			return zero, r.checkpointFailed(err)
+			return zero, r.checkpointFailed(ctx, err)
 		}
 		state = newState
 
-		if done := r.applyWaitStrategy(state, attempt); done {
+		if done := r.applyWaitStrategy(ctx, state, attempt); done {
 			break
 		}
 	}
 
-	return r.checkpointSucceeded(state)
+	return r.checkpointSucceeded(ctx, state)
+}
+
+func (r *WaitForConditionRunner[TState]) recoverState() TState {
+	stored := r.d.GetStepData(r.childStepID)
+	if stored == nil || stored.StepDetails == nil || stored.StepDetails.Result == nil {
+		return r.initialState
+	}
+	recovered, err := utils.SafeDeserialize[TState](r.serdes, stored.StepDetails.Result, r.childStepID, r.d.DurableExecutionArn())
+	if err != nil {
+		return r.initialState
+	}
+	return recovered
 }
 
 // ---------------------------------------------------------------------------
 // Poll loop helpers
 // ---------------------------------------------------------------------------
 
-// applyWaitStrategy consults the waitStrategy (if set) and either returns
-// true (done — exit the loop) or sleeps/suspends before the next poll.
-func (r *WaitForConditionRunner[TState]) applyWaitStrategy(state TState, attempt int) (done bool) {
+func (r *WaitForConditionRunner[TState]) applyWaitStrategy(ctx context.Context, state TState, attempt int) (done bool) {
 	if r.waitStrategy == nil {
 		return true
 	}
@@ -140,27 +163,48 @@ func (r *WaitForConditionRunner[TState]) applyWaitStrategy(state TState, attempt
 		return false
 	}
 
-	r.suspendForDelay(result.Delay, attempt)
-	return false // unreachable after suspend, but satisfies the compiler
+	r.suspendForRetry(ctx, result.Delay, state)
+	return false
 }
 
-func (r *WaitForConditionRunner[TState]) suspendForDelay(delay *types.Duration, attempt int) {
+func (r *WaitForConditionRunner[TState]) suspendForRetry(ctx context.Context, delay *types.Duration, state TState) {
 	waitSeconds := int32(delay.ToSeconds())
-	innerStepID := fmt.Sprintf("%s-wait-%d", r.childStepID, attempt)
 
-	_ = r.d.Checkpoint(innerStepID, types.OperationUpdate{
-		Id:      innerStepID,
-		Action:  types.OperationActionStart,
+	serialized, serErr := utils.SafeSerialize[TState](r.serdes, state, r.childStepID, r.d.DurableExecutionArn())
+	if serErr != nil {
+		r.d.Terminate(types.TerminationResult{
+			Reason:  types.TerminationReasonSerdesFailed,
+			Message: fmt.Sprintf("failed to serialize state for condition %q retry: %v", r.name, serErr),
+		})
+		select {}
+	}
+	var payloadPtr *string
+	if serialized != "" {
+		payloadPtr = &serialized
+	}
+
+	if cpErr := r.d.Checkpoint(ctx, r.childStepID, types.OperationUpdate{
+		Id:      r.childStepID,
+		Action:  types.OperationActionRetry,
 		Type:    types.OperationTypeStep,
 		SubType: &r.subType,
-		WaitOptions: &types.WaitOptions{
-			WaitSeconds: &waitSeconds,
+		Name:    r.namePtr,
+		Payload: payloadPtr,
+		StepOptions: &types.StepOptions{
+			NextAttemptDelaySeconds: &waitSeconds,
 		},
-	})
+	}); cpErr != nil {
+		r.d.Terminate(types.TerminationResult{
+			Reason:  types.TerminationReasonCheckpointFailed,
+			Error:   cpErr,
+			Message: fmt.Sprintf("failed to checkpoint RETRY for condition %q: %v", r.name, cpErr),
+		})
+		select {}
+	}
 
 	r.d.Terminate(types.TerminationResult{
 		Reason:  types.TerminationReasonCheckpointTerminating,
-		Message: fmt.Sprintf("waiting for condition: poll %d", attempt),
+		Message: fmt.Sprintf("waiting for condition %q: retrying after %d seconds", r.name, waitSeconds),
 	})
 	select {}
 }
@@ -169,7 +213,7 @@ func (r *WaitForConditionRunner[TState]) suspendForDelay(delay *types.Duration, 
 // Checkpointing
 // ---------------------------------------------------------------------------
 
-func (r *WaitForConditionRunner[TState]) checkpointSucceeded(state TState) (TState, error) {
+func (r *WaitForConditionRunner[TState]) checkpointSucceeded(ctx context.Context, state TState) (TState, error) {
 	var zero TState
 
 	serialized, serErr := utils.SafeSerialize[TState](r.serdes, state, r.childStepID, r.d.DurableExecutionArn())
@@ -181,7 +225,7 @@ func (r *WaitForConditionRunner[TState]) checkpointSucceeded(state TState) (TSta
 		payloadPtr = &serialized
 	}
 
-	if err := r.d.Checkpoint(r.childStepID, types.OperationUpdate{
+	if err := r.d.Checkpoint(ctx, r.childStepID, types.OperationUpdate{
 		Id:      r.childStepID,
 		Action:  types.OperationActionSucceed,
 		Type:    types.OperationTypeStep,
@@ -195,14 +239,21 @@ func (r *WaitForConditionRunner[TState]) checkpointSucceeded(state TState) (TSta
 	return state, nil
 }
 
-func (r *WaitForConditionRunner[TState]) checkpointFailed(err error) error {
-	_ = r.d.Checkpoint(r.childStepID, types.OperationUpdate{
+func (r *WaitForConditionRunner[TState]) checkpointFailed(ctx context.Context, err error) error {
+	if cpErr := r.d.Checkpoint(ctx, r.childStepID, types.OperationUpdate{
 		Id:      r.childStepID,
 		Action:  types.OperationActionFail,
 		Type:    types.OperationTypeStep,
 		SubType: &r.subType,
 		Name:    r.namePtr,
 		Error:   utils.SafeStringify(err),
-	})
+	}); cpErr != nil {
+		r.d.Terminate(types.TerminationResult{
+			Reason:  types.TerminationReasonCheckpointFailed,
+			Error:   cpErr,
+			Message: fmt.Sprintf("failed to checkpoint FAIL for condition %q: %v", r.name, cpErr),
+		})
+		return cpErr
+	}
 	return durableErrors.NewWaitConditionError(r.childStepID, r.namePtr, err)
 }

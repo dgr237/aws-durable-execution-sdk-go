@@ -2,10 +2,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/aws/aws-lambda-go/lambda"
-	durable "github.com/aws/durable-execution-sdk-go/pkg/durable"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable"
+	durablecontext "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/operations"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/utils"
@@ -62,11 +64,12 @@ func sendConfirmationEmail(orderID string, userID string) error {
 
 // durableHandler is the business logic wrapped in a durable execution handler.
 // The DurableContext provides all durable operations.
-var durableHandler = func(event OrderEvent, durableCtx types.DurableContext) (OrderResult, error) {
-	durableCtx.Logger().Info("Starting order processing", "userId", event.UserID)
+var durableHandler = func(ctx context.Context, event OrderEvent) (OrderResult, error) {
+	dc := durablecontext.GetDurableContext(ctx)
+	dc.Logger().Info("Starting order processing", "userId", event.UserID)
 
 	// Step 1: Validate the order (retried up to 3 times on failure)
-	validatedRaw, err := operations.Step(durableCtx, "validate-order", func(stepCtx types.StepContext) (any, error) {
+	validatedRaw, err := operations.Step(ctx, "validate-order", func(stepCtx context.Context) (any, error) {
 		return validateOrder(event)
 	}, operations.WithStepRetryStrategy[any](utils.Presets.ExponentialBackoff()),
 	)
@@ -81,12 +84,12 @@ var durableHandler = func(event OrderEvent, durableCtx types.DurableContext) (Or
 		anyItems[i] = item
 	}
 
-	batchResults, err := operations.Map(durableCtx,
+	batchResults, err := operations.Map(ctx,
 		"process-items",
 		anyItems,
-		func(child types.DurableContext, itemRaw any, index int, _ []any) (any, error) {
+		func(child context.Context, itemRaw any, index int, _ []any) (any, error) {
 			item := itemRaw.(Item)
-			return operations.Step(durableCtx, fmt.Sprintf("process-item-%d", index), func(stepCtx types.StepContext) (any, error) {
+			return operations.Step(ctx, fmt.Sprintf("process-item-%d", index), func(stepCtx context.Context) (any, error) {
 				return processItem(item)
 			}, nil)
 		}, operations.WithMapMaxConcurrency[any, any](3),
@@ -104,9 +107,9 @@ var durableHandler = func(event OrderEvent, durableCtx types.DurableContext) (Or
 	}
 
 	// Step 3: Wait for human approval via external callback (1 hour timeout)
-	_, err = operations.WaitForCallback[any](durableCtx,
+	_, err = operations.WaitForCallback[any](ctx,
 		"payment-approval",
-		func(sc types.StepContext, callbackID string) error {
+		func(sc context.Context, callbackID string) error {
 			return sendPaymentRequest(event.UserID, event.Amount, callbackID)
 		}, operations.WithWaitForCallbackTimeout[any](types.Duration{Hours: 1}))
 	if err != nil {
@@ -114,7 +117,7 @@ var durableHandler = func(event OrderEvent, durableCtx types.DurableContext) (Or
 	}
 
 	// Step 4: Charge payment (at-most-once semantics — do not double-charge!)
-	paymentIDRaw, err := operations.Step(durableCtx, "charge-payment", func(sc types.StepContext) (any, error) {
+	paymentIDRaw, err := operations.Step(ctx, "charge-payment", func(sc context.Context) (any, error) {
 		return chargePayment(validatedOrderID, event.Amount)
 	}, operations.WithStepSemantics[any](types.StepSemanticsAtMostOncePerRetry), operations.WithStepRetryStrategy[any](utils.Presets.NoRetry()))
 	if err != nil {
@@ -122,18 +125,18 @@ var durableHandler = func(event OrderEvent, durableCtx types.DurableContext) (Or
 	}
 
 	// Step 5: Wait 5 seconds before sending confirmation (demonstrating Wait)
-	_ = operations.Wait(durableCtx, "pre-email-delay", types.Duration{Seconds: 5})
+	_ = operations.Wait(ctx, "pre-email-delay", types.Duration{Seconds: 5})
 
 	// Step 6: Send confirmation email (inside a step so it doesn't replay)
-	_, err = operations.Step(durableCtx, "send-confirmation", func(sc types.StepContext) (any, error) {
+	_, err = operations.Step(ctx, "send-confirmation", func(sc context.Context) (any, error) {
 		return nil, sendConfirmationEmail(paymentIDRaw.(string), event.UserID)
 	}, nil)
 	if err != nil {
 		// Non-critical — log but don't fail the order
-		durableCtx.Logger().Error("Failed to send confirmation email", err)
+		dc.Logger().Error("Failed to send confirmation email", err)
 	}
 
-	durableCtx.Logger().Info("Order completed", "orderId", paymentIDRaw.(string))
+	dc.Logger().Info("Order completed", "orderId", paymentIDRaw.(string))
 
 	return OrderResult{
 		OrderID: paymentIDRaw.(string),

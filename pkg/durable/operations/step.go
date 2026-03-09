@@ -1,10 +1,11 @@
 package operations
 
 import (
+	"context"
 	"fmt"
 	"time"
 
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/context"
+	durableCtx "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
 	durableErrors "github.com/aws/durable-execution-sdk-go/pkg/durable/errors"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/utils"
@@ -18,7 +19,7 @@ type StepRunner[TOut any] struct {
 	d             types.DurableContext
 	name          string
 	namePtr       *string
-	fn            func(ctx types.StepContext) (TOut, error)
+	fn            func(ctx context.Context) (TOut, error)
 	serdes        types.Serdes
 	semantics     types.StepSemantics
 	retryStrategy func(err error, attempt int) types.RetryDecision
@@ -29,7 +30,7 @@ type StepRunner[TOut any] struct {
 func newStepRunner[TOut any](
 	d types.DurableContext,
 	name string,
-	fn func(ctx types.StepContext) (TOut, error),
+	fn func(ctx context.Context) (TOut, error),
 	opts []StepOption[TOut],
 ) *StepRunner[TOut] {
 	r := &StepRunner[TOut]{
@@ -53,16 +54,17 @@ func newStepRunner[TOut any](
 // ---------------------------------------------------------------------------
 
 func Step[TOut any](
-	d types.DurableContext,
+	ctx context.Context,
 	name string,
-	fn func(ctx types.StepContext) (TOut, error),
+	fn func(ctx context.Context) (TOut, error),
 	opts ...StepOption[TOut],
 ) (TOut, error) {
+	d := durableCtx.GetDurableContext(ctx)
 	r := newStepRunner[TOut](d, name, fn, opts)
 
 	stored := r.d.GetStepData(r.stepID)
 
-	if err := context.ValidateReplayConsistency(r.stepID, types.OperationTypeStep, r.namePtr, &r.subType, stored); err != nil {
+	if err := durableCtx.ValidateReplayConsistency(r.stepID, types.OperationTypeStep, r.namePtr, &r.subType, stored); err != nil {
 		r.d.Terminate(types.TerminationResult{
 			Reason:  types.TerminationReasonContextValidationError,
 			Error:   err,
@@ -78,7 +80,7 @@ func Step[TOut any](
 	case stored != nil && stored.Status == types.OperationStatusFailed:
 		return r.replayFailed(stored)
 	default:
-		return r.execute()
+		return r.execute(ctx)
 	}
 }
 
@@ -122,21 +124,22 @@ func (r *StepRunner[TOut]) replayFailed(stored *types.Operation) (TOut, error) {
 	return zero, durableErrors.NewStepError(r.stepID, r.namePtr, cause)
 }
 
-func (r *StepRunner[TOut]) execute() (TOut, error) {
-	stepCtx := r.d.NewStepContext()
+func (r *StepRunner[TOut]) execute(ctx context.Context) (TOut, error) {
+	// Build a step context.Context from the parent durable context
+	stepCtxGo := durableCtx.NewStepContextFrom(ctx)
 	for attempt := 1; ; attempt++ {
-		if err := r.maybeCheckpointStart(); err != nil {
+		if err := r.maybeCheckpointStart(ctx); err != nil {
 			var zero TOut
 			return zero, err
 		}
 
-		result, stepErr := r.fn(stepCtx)
+		result, stepErr := r.fn(stepCtxGo)
 
 		if stepErr == nil {
-			return r.handleSuccess(result)
+			return r.handleSuccess(ctx, result)
 		}
 
-		if shouldStop, out, err := r.handleFailure(stepErr, attempt); shouldStop {
+		if shouldStop, out, err := r.handleFailure(ctx, stepErr, attempt); shouldStop {
 			return out, err
 		}
 	}
@@ -146,11 +149,11 @@ func (r *StepRunner[TOut]) execute() (TOut, error) {
 // Retry loop helpers
 // ---------------------------------------------------------------------------
 
-func (r *StepRunner[TOut]) maybeCheckpointStart() error {
+func (r *StepRunner[TOut]) maybeCheckpointStart(ctx context.Context) error {
 	if r.semantics != types.StepSemanticsAtMostOncePerRetry {
 		return nil
 	}
-	return r.d.Checkpoint(r.stepID, types.OperationUpdate{
+	return r.d.Checkpoint(ctx, r.stepID, types.OperationUpdate{
 		Id:      r.stepID,
 		Action:  types.OperationActionStart,
 		Type:    types.OperationTypeStep,
@@ -159,7 +162,7 @@ func (r *StepRunner[TOut]) maybeCheckpointStart() error {
 	})
 }
 
-func (r *StepRunner[TOut]) handleSuccess(result TOut) (TOut, error) {
+func (r *StepRunner[TOut]) handleSuccess(ctx context.Context, result TOut) (TOut, error) {
 	var zero TOut
 
 	serialized, serErr := utils.SafeSerialize(r.serdes, result, r.stepID, r.d.DurableExecutionArn())
@@ -176,7 +179,7 @@ func (r *StepRunner[TOut]) handleSuccess(result TOut) (TOut, error) {
 		payloadPtr = &serialized
 	}
 
-	if err := r.d.Checkpoint(r.stepID, types.OperationUpdate{
+	if err := r.d.Checkpoint(ctx, r.stepID, types.OperationUpdate{
 		Id:      r.stepID,
 		Action:  types.OperationActionSucceed,
 		Type:    types.OperationTypeStep,
@@ -191,45 +194,65 @@ func (r *StepRunner[TOut]) handleSuccess(result TOut) (TOut, error) {
 	return result, nil
 }
 
-func (r *StepRunner[TOut]) handleFailure(stepErr error, attempt int) (stop bool, _ TOut, _ error) {
+func (r *StepRunner[TOut]) handleFailure(ctx context.Context, stepErr error, attempt int) (stop bool, _ TOut, _ error) {
 	var zero TOut
 
 	if durableErrors.IsUnrecoverableError(stepErr) {
 		return true, zero, stepErr
 	}
 
-	if r.shouldRetry(stepErr, attempt) {
-		r.sleepBeforeRetry(stepErr, attempt)
-		return false, zero, nil
+	if r.retryStrategy != nil {
+		decision := r.retryStrategy(stepErr, attempt)
+		if decision.ShouldRetry {
+			if decision.Delay != nil && decision.Delay.ToSeconds() > 0 {
+				delaySeconds := int32(decision.Delay.ToSeconds())
+				if cpErr := r.d.Checkpoint(ctx, r.stepID, types.OperationUpdate{
+					Id:      r.stepID,
+					Action:  types.OperationActionRetry,
+					Type:    types.OperationTypeStep,
+					SubType: &r.subType,
+					Name:    r.namePtr,
+					Error:   utils.SafeStringify(stepErr),
+					StepOptions: &types.StepOptions{
+						NextAttemptDelaySeconds: &delaySeconds,
+					},
+				}); cpErr != nil {
+					r.d.Terminate(types.TerminationResult{
+						Reason:  types.TerminationReasonCheckpointFailed,
+						Error:   cpErr,
+						Message: fmt.Sprintf("failed to checkpoint RETRY for step %s: %v", r.stepID, cpErr),
+					})
+					return true, zero, cpErr
+				}
+				r.d.Terminate(types.TerminationResult{
+					Reason:  types.TerminationReasonCheckpointTerminating,
+					Message: fmt.Sprintf("step %s suspended for retry after %d seconds", r.stepID, delaySeconds),
+				})
+				return true, zero, &durableErrors.TerminatedError{Message: "step suspended for retry"}
+			}
+			// No delay — retry inline.
+			time.Sleep(time.Second)
+			return false, zero, nil
+		}
 	}
 
-	_ = r.d.Checkpoint(r.stepID, types.OperationUpdate{
+	if cpErr := r.d.Checkpoint(ctx, r.stepID, types.OperationUpdate{
 		Id:      r.stepID,
 		Action:  types.OperationActionFail,
 		Type:    types.OperationTypeStep,
 		SubType: &r.subType,
 		Name:    r.namePtr,
 		Error:   utils.SafeStringify(stepErr),
-	})
+	}); cpErr != nil {
+		r.d.Terminate(types.TerminationResult{
+			Reason:  types.TerminationReasonCheckpointFailed,
+			Error:   cpErr,
+			Message: fmt.Sprintf("failed to checkpoint FAIL for step %s: %v", r.stepID, cpErr),
+		})
+		return true, zero, cpErr
+	}
 	r.markCompleted()
 	return true, zero, durableErrors.NewStepError(r.stepID, r.namePtr, stepErr)
-}
-
-func (r *StepRunner[TOut]) shouldRetry(err error, attempt int) bool {
-	if r.retryStrategy == nil {
-		return false
-	}
-	return r.retryStrategy(err, attempt).ShouldRetry
-}
-
-func (r *StepRunner[TOut]) sleepBeforeRetry(err error, attempt int) {
-	if r.retryStrategy != nil {
-		if d := r.retryStrategy(err, attempt).Delay; d != nil {
-			time.Sleep(d.ToDuration())
-			return
-		}
-	}
-	time.Sleep(time.Second)
 }
 
 // ---------------------------------------------------------------------------

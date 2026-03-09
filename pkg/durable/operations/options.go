@@ -22,6 +22,10 @@ func WithMapItemNamer[TIn, TOut any](fn func(item TIn, index int) string) MapOpt
 	return func(r *MapRunner[TIn, TOut]) { r.itemNamer = fn }
 }
 
+func WithMapCompletionConfig[TIn, TOut any](cfg *types.BatchCompletionConfig) MapOption[TIn, TOut] {
+	return func(r *MapRunner[TIn, TOut]) { r.completionConfig = cfg }
+}
+
 // ---------------------------------------------------------------------------
 // CallbackOption
 // ---------------------------------------------------------------------------
@@ -54,6 +58,10 @@ func WithParallelSerdes[TOut any](s types.Serdes) ParallelOption[TOut] {
 
 func WithParallelMaxConcurrency[TOut any](n int) ParallelOption[TOut] {
 	return func(r *ParallelRunner[TOut]) { r.maxConcurrency = n }
+}
+
+func WithParallelCompletionConfig[TOut any](cfg *types.BatchCompletionConfig) ParallelOption[TOut] {
+	return func(r *ParallelRunner[TOut]) { r.completionConfig = cfg }
 }
 
 // ---------------------------------------------------------------------------

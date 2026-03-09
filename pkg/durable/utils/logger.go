@@ -1,129 +1,60 @@
 package utils
 
 import (
-	"encoding/json"
-	"fmt"
+	"log/slog"
 	"os"
-	"time"
 
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 )
 
-// DefaultLogger is the built-in structured logger that emits JSON to stdout.
-// It implements the types.Logger interface.
+// DefaultLogger is the built-in structured logger backed by log/slog.
+// It emits JSON to stdout and implements the types.Logger interface.
 type DefaultLogger struct {
-	executionArn string
-	requestID    string
-	tenantID     string
-	operationID  string
+	inner *slog.Logger
 }
 
-// NewDefaultLogger creates a new DefaultLogger with execution context.
+// NewDefaultLogger creates a DefaultLogger with a JSON handler on stdout,
+// pre-populated with the given execution context fields.
 func NewDefaultLogger(executionArn, requestID, tenantID string) *DefaultLogger {
-	return &DefaultLogger{
-		executionArn: executionArn,
-		requestID:    requestID,
-		tenantID:     tenantID,
-	}
+	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})
+	base := slog.New(handler).With(
+		"executionArn", executionArn,
+		"requestId", requestID,
+		"tenantId", tenantID,
+	)
+	return &DefaultLogger{inner: base}
+}
+
+// NewDefaultLoggerFromSlog creates a DefaultLogger backed by an existing *slog.Logger,
+// allowing callers to configure their own handler, level, or output destination.
+func NewDefaultLoggerFromSlog(logger *slog.Logger) *DefaultLogger {
+	return &DefaultLogger{inner: logger}
 }
 
 // WithOperationID returns a copy of the logger with the given operation ID set.
 func (l *DefaultLogger) WithOperationID(opID string) *DefaultLogger {
-	copy := *l
-	copy.operationID = opID
-	return &copy
-}
-
-type logEntry struct {
-	Timestamp    string `json:"timestamp"`
-	Level        string `json:"level"`
-	ExecutionArn string `json:"executionArn,omitempty"`
-	RequestID    string `json:"requestId,omitempty"`
-	TenantID     string `json:"tenantId,omitempty"`
-	OperationID  string `json:"operationId,omitempty"`
-	Message      any    `json:"message"`
-	Error        string `json:"error,omitempty"`
-}
-
-func (l *DefaultLogger) emit(level string, message any, err error) {
-	entry := logEntry{
-		Timestamp:    time.Now().UTC().Format(time.RFC3339Nano),
-		Level:        level,
-		ExecutionArn: l.executionArn,
-		RequestID:    l.requestID,
-		TenantID:     l.tenantID,
-		OperationID:  l.operationID,
-		Message:      message,
-	}
-	if err != nil {
-		entry.Error = err.Error()
-	}
-
-	b, jsonErr := json.Marshal(entry)
-	if jsonErr != nil {
-		fmt.Fprintf(os.Stdout, `{"level":"%s","message":%q,"jsonError":%q}`+"\n", level, fmt.Sprintf("%v", message), jsonErr.Error())
-		return
-	}
-	fmt.Fprintf(os.Stdout, "%s\n", b)
-}
-
-func fieldsToMap(fields []any) map[string]any {
-	if len(fields) == 0 {
-		return nil
-	}
-	m := make(map[string]any, len(fields)/2+1)
-	for i := 0; i+1 < len(fields); i += 2 {
-		key := fmt.Sprintf("%v", fields[i])
-		m[key] = fields[i+1]
-	}
-	if len(fields)%2 != 0 {
-		m["_extra"] = fields[len(fields)-1]
-	}
-	return m
+	return &DefaultLogger{inner: l.inner.With("operationId", opID)}
 }
 
 // Info logs at INFO level.
 func (l *DefaultLogger) Info(message string, fields ...any) {
-	msg := any(message)
-	if len(fields) > 0 {
-		m := fieldsToMap(fields)
-		m["message"] = message
-		msg = m
-	}
-	l.emit("INFO", msg, nil)
+	l.inner.Info(message, fields...)
 }
 
 // Warn logs at WARN level.
 func (l *DefaultLogger) Warn(message string, fields ...any) {
-	msg := any(message)
-	if len(fields) > 0 {
-		m := fieldsToMap(fields)
-		m["message"] = message
-		msg = m
-	}
-	l.emit("WARN", msg, nil)
+	l.inner.Warn(message, fields...)
 }
 
 // Error logs at ERROR level.
 func (l *DefaultLogger) Error(message string, err error, fields ...any) {
-	msg := any(message)
-	if len(fields) > 0 {
-		m := fieldsToMap(fields)
-		m["message"] = message
-		msg = m
-	}
-	l.emit("ERROR", msg, err)
+	args := append([]any{"error", err}, fields...)
+	l.inner.Error(message, args...)
 }
 
 // Debug logs at DEBUG level.
 func (l *DefaultLogger) Debug(message string, fields ...any) {
-	msg := any(message)
-	if len(fields) > 0 {
-		m := fieldsToMap(fields)
-		m["message"] = message
-		msg = m
-	}
-	l.emit("DEBUG", msg, nil)
+	l.inner.Debug(message, fields...)
 }
 
 // ModeAwareLogger wraps a Logger to suppress output during replay mode.

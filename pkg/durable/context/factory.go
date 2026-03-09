@@ -1,6 +1,7 @@
 package context
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/checkpoint"
@@ -8,20 +9,22 @@ import (
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/utils"
 )
 
-// NewRootContext creates a root-level DurableContext for use by the SDK entrypoint.
+// NewRootContext creates a root-level context.Context carrying a DurableContext for use by the SDK entrypoint.
 func NewRootContext(
+	goCtx context.Context,
 	execCtx *checkpoint.ExecutionContext,
 	lambdaCtx *types.LambdaContext,
 	mgr *checkpoint.Manager,
 	mode types.DurableExecutionMode,
 	logger types.Logger,
-) types.DurableContext {
-	return NewDurableContext(execCtx, lambdaCtx, mgr, mode, logger)
+) context.Context {
+	return NewDurableContext(goCtx, execCtx, lambdaCtx, mgr, mode, logger)
 }
 
 // InitializeExecutionContext builds an ExecutionContext from the invocation input by
 // loading the full operation history (handling pagination) and resolving the execution mode.
 func InitializeExecutionContext(
+	ctx context.Context,
 	event types.DurableExecutionInvocationInput,
 	lambdaCtx *types.LambdaContext,
 	client checkpoint.Client,
@@ -32,7 +35,7 @@ func InitializeExecutionContext(
 
 	nextMarker := event.InitialExecutionState.NextMarker
 	for nextMarker != nil && *nextMarker != "" {
-		resp, err := client.GetExecutionState(types.GetDurableExecutionStateRequest{
+		resp, err := client.GetExecutionState(ctx, types.GetDurableExecutionStateRequest{
 			DurableExecutionArn: event.DurableExecutionArn,
 			CheckpointToken:     event.CheckpointToken,
 			NextMarker:          nextMarker,

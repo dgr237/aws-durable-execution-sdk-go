@@ -1,10 +1,10 @@
 package operations
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/context"
+	durableCtx "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/utils"
 )
@@ -43,18 +43,31 @@ func newCallbackRunner[TResult any](
 // ---------------------------------------------------------------------------
 
 func CreateCallback[TResult any](
-	d types.DurableContext,
+	ctx context.Context,
 	name string,
 	opts ...CallbackOption[TResult],
 ) (<-chan types.CallbackResult[TResult], string, error) {
+	d := durableCtx.GetDurableContext(ctx)
 	r := newCallbackRunner[TResult](d, name, opts)
 
-	stored := r.d.GetStepData(r.stepID)
-	if stored != nil && stored.Status == types.OperationStatusSucceeded {
-		return r.replaySucceeded(stored), "", nil
+	stored := d.GetStepData(r.stepID)
+
+	subType := types.OperationSubTypeCallback
+	if err := durableCtx.ValidateReplayConsistency(r.stepID, types.OperationTypeCallback, r.namePtr, &subType, stored); err != nil {
+		d.Terminate(types.TerminationResult{
+			Reason:  types.TerminationReasonContextValidationError,
+			Error:   err,
+			Message: err.Error(),
+		})
+		return nil, "", err
 	}
 
-	return r.startFresh()
+	if stored != nil && stored.Status == types.OperationStatusSucceeded {
+		callbackID := r.storedCallbackID(stored)
+		return r.replaySucceeded(stored), callbackID, nil
+	}
+
+	return r.startFresh(ctx)
 }
 
 // ---------------------------------------------------------------------------
@@ -64,21 +77,18 @@ func CreateCallback[TResult any](
 func (r *CallbackRunner[TResult]) replaySucceeded(stored *types.Operation) <-chan types.CallbackResult[TResult] {
 	resultPtr := r.extractStoredResult(stored)
 
-	var result TResult
-	if resultPtr != nil && *resultPtr != "" {
-		_ = json.Unmarshal([]byte(*resultPtr), &result)
-	}
+	result, err := utils.SafeDeserialize[TResult](utils.DefaultSerdes, resultPtr, r.stepID, r.d.DurableExecutionArn())
 
 	ch := make(chan types.CallbackResult[TResult], 1)
-	ch <- types.CallbackResult[TResult]{Value: result}
+	ch <- types.CallbackResult[TResult]{Value: result, Err: err}
 	close(ch)
 	return ch
 }
 
-func (r *CallbackRunner[TResult]) startFresh() (<-chan types.CallbackResult[TResult], string, error) {
+func (r *CallbackRunner[TResult]) startFresh(ctx context.Context) (<-chan types.CallbackResult[TResult], string, error) {
 	callbackID := r.generateCallbackID()
 
-	if err := r.d.Checkpoint(r.stepID, types.OperationUpdate{
+	if err := r.d.Checkpoint(ctx, r.stepID, types.OperationUpdate{
 		Id:              r.stepID,
 		Action:          types.OperationActionStart,
 		Type:            types.OperationTypeCallback,
@@ -115,7 +125,14 @@ func (r *CallbackRunner[TResult]) extractStoredResult(stored *types.Operation) *
 }
 
 func (r *CallbackRunner[TResult]) generateCallbackID() string {
-	return fmt.Sprintf("cb-%s-%s", context.HashedStepID(r.stepID), utils.HashID(r.d.DurableExecutionArn()))
+	return fmt.Sprintf("cb-%s-%s", durableCtx.HashedStepID(r.stepID), utils.HashID(r.d.DurableExecutionArn()))
+}
+
+func (r *CallbackRunner[TResult]) storedCallbackID(stored *types.Operation) string {
+	if stored.CallbackDetails != nil && stored.CallbackDetails.CallbackId != nil {
+		return *stored.CallbackDetails.CallbackId
+	}
+	return r.generateCallbackID()
 }
 
 func (r *CallbackRunner[TResult]) callbackOptions() *types.CallbackOptions {

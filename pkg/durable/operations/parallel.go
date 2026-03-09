@@ -1,9 +1,11 @@
 package operations
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
+	durableCtx "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
 	durableErrors "github.com/aws/durable-execution-sdk-go/pkg/durable/errors"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/utils"
@@ -14,19 +16,20 @@ import (
 // ---------------------------------------------------------------------------
 
 type ParallelRunner[TOut any] struct {
-	d              types.DurableContext
-	name           string
-	namePtr        *string
-	branches       []func(ctx types.DurableContext) (TOut, error)
-	serdes         types.Serdes
-	maxConcurrency int
-	outerStepID    string
+	d                types.DurableContext
+	name             string
+	namePtr          *string
+	branches         []func(ctx context.Context) (TOut, error)
+	serdes           types.Serdes
+	maxConcurrency   int
+	completionConfig *types.BatchCompletionConfig
+	outerStepID      string
 }
 
 func newParallelRunner[TOut any](
 	d types.DurableContext,
 	name string,
-	branches []func(ctx types.DurableContext) (TOut, error),
+	branches []func(ctx context.Context) (TOut, error),
 	opts []ParallelOption[TOut],
 ) *ParallelRunner[TOut] {
 	r := &ParallelRunner[TOut]{
@@ -48,14 +51,25 @@ func newParallelRunner[TOut any](
 // ---------------------------------------------------------------------------
 
 func Parallel[TOut any](
-	d types.DurableContext,
+	ctx context.Context,
 	name string,
-	branches []func(ctx types.DurableContext) (TOut, error),
+	branches []func(ctx context.Context) (TOut, error),
 	opts ...ParallelOption[TOut],
 ) (types.BatchResult[TOut], error) {
+	d := durableCtx.GetDurableContext(ctx)
 	r := newParallelRunner[TOut](d, name, branches, opts)
 
 	stored := r.d.GetStepData(r.outerStepID)
+
+	subType := types.OperationSubTypeParallel
+	if err := durableCtx.ValidateReplayConsistency(r.outerStepID, types.OperationTypeContext, r.namePtr, &subType, stored); err != nil {
+		r.d.Terminate(types.TerminationResult{
+			Reason:  types.TerminationReasonContextValidationError,
+			Error:   err,
+			Message: err.Error(),
+		})
+		return types.BatchResult[TOut]{}, err
+	}
 
 	switch {
 	case stored != nil && stored.Status == types.OperationStatusSucceeded:
@@ -63,9 +77,9 @@ func Parallel[TOut any](
 	case stored != nil && stored.Status == types.OperationStatusFailed:
 		return r.replayFailed(stored)
 	case stored != nil && stored.Status == types.OperationStatusStarted:
-		return r.resumeStarted()
+		return r.resumeStarted(ctx)
 	default:
-		return r.startFresh()
+		return r.startFresh(ctx)
 	}
 }
 
@@ -75,14 +89,16 @@ func Parallel[TOut any](
 
 func (r *ParallelRunner[TOut]) replaySucceeded(stored *types.Operation) (types.BatchResult[TOut], error) {
 	var resultPtr *string
-	if stored.StepDetails != nil {
+	if stored.ContextDetails != nil {
+		resultPtr = stored.ContextDetails.Result
+	} else if stored.StepDetails != nil {
 		resultPtr = stored.StepDetails.Result
 	}
 	raw, err := utils.SafeDeserialize[[]TOut](r.serdes, resultPtr, r.outerStepID, r.d.DurableExecutionArn())
 	if err != nil {
 		return types.BatchResult[TOut]{}, err
 	}
-	batch := types.BatchResult[TOut]{}
+	batch := types.BatchResult[TOut]{CompletionReason: "ALL_SUCCEEDED"}
 	for i, v := range raw {
 		batch.Items = append(batch.Items, types.BatchResultItem[TOut]{Value: v, Index: i})
 	}
@@ -92,7 +108,9 @@ func (r *ParallelRunner[TOut]) replaySucceeded(stored *types.Operation) (types.B
 func (r *ParallelRunner[TOut]) replayFailed(stored *types.Operation) (types.BatchResult[TOut], error) {
 	r.d.Logger().Info(fmt.Sprintf("Replaying parallel %s as FAILED", r.outerStepID))
 	var cause error
-	if stored.Error != nil {
+	if stored.ContextDetails != nil && stored.ContextDetails.Error != nil {
+		cause = utils.ErrorFromErrorObject(stored.ContextDetails.Error)
+	} else if stored.Error != nil {
 		cause = utils.ErrorFromErrorObject(stored.Error)
 	}
 	return types.BatchResult[TOut]{}, durableErrors.NewParallelError(r.outerStepID, r.namePtr, cause)
@@ -102,47 +120,62 @@ func (r *ParallelRunner[TOut]) replayFailed(stored *types.Operation) (types.Batc
 // Branches that already have a stored terminal state are collected directly;
 // any that are still STARTED or missing are re-executed, then the whole
 // batch is finalized.
-func (r *ParallelRunner[TOut]) resumeStarted() (types.BatchResult[TOut], error) {
+func (r *ParallelRunner[TOut]) resumeStarted(ctx context.Context) (types.BatchResult[TOut], error) {
 	r.d.Logger().Info(fmt.Sprintf("Parallel %s already started, checking branch status", r.outerStepID))
 
 	results := make([]TOut, len(r.branches))
 	errs := make([]error, len(r.branches))
 
 	pendingIndices := r.collectCompletedBranches(results, errs)
+	reason := "ALL_SUCCEEDED"
 	if len(pendingIndices) > 0 {
-		r.executePendingBranches(pendingIndices, results, errs)
+		reason = r.executePendingBranches(ctx, pendingIndices, results, errs)
+	} else {
+		for _, e := range errs {
+			if e != nil {
+				reason = "COMPLETED_WITH_ERRORS"
+				break
+			}
+		}
 	}
 
-	return r.finalize(results, errs)
+	return r.finalize(ctx, results, errs, reason)
 }
 
 // startFresh checkpoints the Parallel START, executes all branches, then finalizes.
-func (r *ParallelRunner[TOut]) startFresh() (types.BatchResult[TOut], error) {
-	_ = r.d.Checkpoint(r.outerStepID, types.OperationUpdate{
+func (r *ParallelRunner[TOut]) startFresh(ctx context.Context) (types.BatchResult[TOut], error) {
+	if err := r.d.Checkpoint(ctx, r.outerStepID, types.OperationUpdate{
 		Id:      r.outerStepID,
 		Action:  types.OperationActionStart,
-		Type:    types.OperationTypeStep,
+		Type:    types.OperationTypeContext,
 		SubType: subTypePtr(types.OperationSubTypeParallel),
 		Name:    r.namePtr,
-	})
+	}); err != nil {
+		r.d.Terminate(types.TerminationResult{
+			Reason:  types.TerminationReasonCheckpointFailed,
+			Error:   err,
+			Message: fmt.Sprintf("failed to checkpoint START for parallel %s: %v", r.outerStepID, err),
+		})
+		return types.BatchResult[TOut]{}, err
+	}
 
-	results, errs := r.executeBranches()
-	return r.finalize(results, errs)
+	results, errs, reason := r.executeBranches(ctx)
+	return r.finalize(ctx, results, errs, reason)
 }
 
 // ---------------------------------------------------------------------------
 // Execution
 // ---------------------------------------------------------------------------
 
-func (r *ParallelRunner[TOut]) executeBranches() ([]TOut, []error) {
+func (r *ParallelRunner[TOut]) executeBranches(ctx context.Context) ([]TOut, []error, string) {
 	results := make([]TOut, len(r.branches))
 	errs := make([]error, len(r.branches))
 	allIndices := make([]int, len(r.branches))
 	for i := range allIndices {
 		allIndices[i] = i
 	}
-	r.executePendingBranches(allIndices, results, errs)
-	return results, errs
+	reason := r.executePendingBranches(ctx, allIndices, results, errs)
+	return results, errs, reason
 }
 
 // collectCompletedBranches pre-populates results/errs from already-terminal branch
@@ -169,11 +202,15 @@ func (r *ParallelRunner[TOut]) collectCompletedBranches(results []TOut, errs []e
 	return pending
 }
 
-// executePendingBranches runs a specific subset of branches in parallel.
-func (r *ParallelRunner[TOut]) executePendingBranches(indices []int, results []TOut, errs []error) {
+// executePendingBranches runs a specific subset of branches in parallel,
+// honouring the completionConfig policy for early termination.
+// Returns the CompletionReason string.
+func (r *ParallelRunner[TOut]) executePendingBranches(ctx context.Context, indices []int, results []TOut, errs []error) string {
 	if len(indices) == 0 {
-		return
+		return "ALL_SUCCEEDED"
 	}
+
+	tracker := newCompletionTracker(len(r.branches), r.completionConfig)
 
 	workCh := make(chan int, len(indices))
 	for _, i := range indices {
@@ -191,35 +228,55 @@ func (r *ParallelRunner[TOut]) executePendingBranches(indices []int, results []T
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := range workCh {
-				results[i], errs[i] = r.executeBranch(i)
+			for {
+				select {
+				case <-tracker.Done():
+					return
+				case i, ok := <-workCh:
+					if !ok {
+						return
+					}
+					results[i], errs[i] = r.executeBranch(ctx, i)
+					if tracker.Record(errs[i]) {
+						return
+					}
+				}
 			}
 		}()
 	}
 	wg.Wait()
+	return tracker.CompletionReason()
 }
 
 // executeBranch runs a single branch, checkpointing its START and SUCCEED/FAIL.
-func (r *ParallelRunner[TOut]) executeBranch(i int) (TOut, error) {
+func (r *ParallelRunner[TOut]) executeBranch(ctx context.Context, i int) (TOut, error) {
 	var zero TOut
 	branchName := r.branchName(i)
-	childCtx := r.d.NewChildDurableContext(branchName, branchName, r.d.Mode())
+	childGoCtx := r.d.NewChildDurableContext(ctx, branchName, branchName, r.d.Mode())
 
-	_ = r.d.Checkpoint(branchName, types.OperationUpdate{
-		Id:      branchName,
-		Action:  types.OperationActionStart,
-		Type:    types.OperationTypeStep,
-		SubType: subTypePtr(types.OperationSubTypeParallelBranch),
-		// TODO: ParentId should be &r.outerStepID
-	})
-
-	result, err := r.branches[i](childCtx)
-	if err != nil {
-		r.checkpointBranchFailed(branchName, err)
+	outerID := r.outerStepID
+	if err := r.d.Checkpoint(ctx, branchName, types.OperationUpdate{
+		Id:       branchName,
+		Action:   types.OperationActionStart,
+		Type:     types.OperationTypeContext,
+		SubType:  subTypePtr(types.OperationSubTypeParallelBranch),
+		ParentId: &outerID,
+	}); err != nil {
+		r.d.Terminate(types.TerminationResult{
+			Reason:  types.TerminationReasonCheckpointFailed,
+			Error:   err,
+			Message: fmt.Sprintf("failed to checkpoint START for branch %s: %v", branchName, err),
+		})
 		return zero, err
 	}
 
-	r.checkpointBranchSucceeded(branchName, result)
+	result, err := r.branches[i](childGoCtx)
+	if err != nil {
+		r.checkpointBranchFailed(ctx, branchName, err)
+		return zero, err
+	}
+
+	r.checkpointBranchSucceeded(ctx, branchName, result)
 	return result, nil
 }
 
@@ -227,54 +284,92 @@ func (r *ParallelRunner[TOut]) executeBranch(i int) (TOut, error) {
 // Checkpointing
 // ---------------------------------------------------------------------------
 
-func (r *ParallelRunner[TOut]) checkpointBranchSucceeded(branchName string, result TOut) {
-	serialized, _ := utils.SafeSerialize(r.serdes, result, branchName, r.d.DurableExecutionArn())
+func (r *ParallelRunner[TOut]) checkpointBranchSucceeded(ctx context.Context, branchName string, result TOut) {
+	serialized, serErr := utils.SafeSerialize(r.serdes, result, branchName, r.d.DurableExecutionArn())
+	if serErr != nil {
+		r.d.Terminate(types.TerminationResult{
+			Reason:  types.TerminationReasonSerdesFailed,
+			Message: fmt.Sprintf("failed to serialize result for branch %s: %v", branchName, serErr),
+		})
+		return
+	}
 	var p *string
 	if serialized != "" {
 		p = &serialized
 	}
-	_ = r.d.Checkpoint(branchName, types.OperationUpdate{
-		Id:      branchName,
-		Action:  types.OperationActionSucceed,
-		Type:    types.OperationTypeStep,
-		SubType: subTypePtr(types.OperationSubTypeParallelBranch),
-		Payload: p,
-		// TODO: ParentId should be &r.outerStepID
-	})
+	outerID := r.outerStepID
+	if err := r.d.Checkpoint(ctx, branchName, types.OperationUpdate{
+		Id:       branchName,
+		Action:   types.OperationActionSucceed,
+		Type:     types.OperationTypeContext,
+		SubType:  subTypePtr(types.OperationSubTypeParallelBranch),
+		Payload:  p,
+		ParentId: &outerID,
+	}); err != nil {
+		r.d.Terminate(types.TerminationResult{
+			Reason:  types.TerminationReasonCheckpointFailed,
+			Error:   err,
+			Message: fmt.Sprintf("failed to checkpoint SUCCEED for branch %s: %v", branchName, err),
+		})
+	}
 }
 
-func (r *ParallelRunner[TOut]) checkpointBranchFailed(branchName string, err error) {
-	_ = r.d.Checkpoint(branchName, types.OperationUpdate{
-		Id:      branchName,
-		Action:  types.OperationActionFail,
-		Type:    types.OperationTypeStep,
-		SubType: subTypePtr(types.OperationSubTypeParallelBranch),
-		Error:   utils.SafeStringify(err),
-		// TODO: ParentId should be &r.outerStepID
-	})
+func (r *ParallelRunner[TOut]) checkpointBranchFailed(ctx context.Context, branchName string, err error) {
+	outerID := r.outerStepID
+	if cpErr := r.d.Checkpoint(ctx, branchName, types.OperationUpdate{
+		Id:       branchName,
+		Action:   types.OperationActionFail,
+		Type:     types.OperationTypeContext,
+		SubType:  subTypePtr(types.OperationSubTypeParallelBranch),
+		Error:    utils.SafeStringify(err),
+		ParentId: &outerID,
+	}); cpErr != nil {
+		r.d.Terminate(types.TerminationResult{
+			Reason:  types.TerminationReasonCheckpointFailed,
+			Error:   cpErr,
+			Message: fmt.Sprintf("failed to checkpoint FAIL for branch %s: %v", branchName, cpErr),
+		})
+	}
 }
 
-func (r *ParallelRunner[TOut]) finalize(results []TOut, errs []error) (types.BatchResult[TOut], error) {
-	batchResult := types.BatchResult[TOut]{Items: make([]types.BatchResultItem[TOut], len(r.branches))}
+func (r *ParallelRunner[TOut]) finalize(ctx context.Context, results []TOut, errs []error, reason string) (types.BatchResult[TOut], error) {
+	batchResult := types.BatchResult[TOut]{
+		Items:            make([]types.BatchResultItem[TOut], len(r.branches)),
+		CompletionReason: reason,
+	}
 	values := make([]TOut, len(r.branches))
 	for i := range r.branches {
 		batchResult.Items[i] = types.BatchResultItem[TOut]{Value: results[i], Err: errs[i], Index: i}
 		values[i] = results[i]
 	}
 
-	serialized, _ := utils.SafeSerialize(r.serdes, values, r.outerStepID, r.d.DurableExecutionArn())
+	serialized, serErr := utils.SafeSerialize(r.serdes, values, r.outerStepID, r.d.DurableExecutionArn())
+	if serErr != nil {
+		r.d.Terminate(types.TerminationResult{
+			Reason:  types.TerminationReasonSerdesFailed,
+			Message: fmt.Sprintf("failed to serialize parallel result for %s: %v", r.outerStepID, serErr),
+		})
+		return types.BatchResult[TOut]{}, &durableErrors.SerdesFailedError{Message: serErr.Error()}
+	}
 	var payloadPtr *string
 	if serialized != "" {
 		payloadPtr = &serialized
 	}
-	_ = r.d.Checkpoint(r.outerStepID, types.OperationUpdate{
+	if err := r.d.Checkpoint(ctx, r.outerStepID, types.OperationUpdate{
 		Id:      r.outerStepID,
 		Action:  types.OperationActionSucceed,
-		Type:    types.OperationTypeStep,
+		Type:    types.OperationTypeContext,
 		SubType: subTypePtr(types.OperationSubTypeParallel),
 		Name:    r.namePtr,
 		Payload: payloadPtr,
-	})
+	}); err != nil {
+		r.d.Terminate(types.TerminationResult{
+			Reason:  types.TerminationReasonCheckpointFailed,
+			Error:   err,
+			Message: fmt.Sprintf("failed to checkpoint SUCCEED for parallel %s: %v", r.outerStepID, err),
+		})
+		return types.BatchResult[TOut]{}, err
+	}
 
 	return batchResult, nil
 }

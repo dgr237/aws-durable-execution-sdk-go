@@ -9,10 +9,10 @@
 //	type MyEvent struct { UserID string }
 //	type MyResult struct { Status string }
 //
-//	handler := durable.WithDurableExecution(func(event MyEvent, ctx types.DurableContext) (MyResult, error) {
-//	    data, err := ctx.Step("fetch-user", func(sc types.StepContext) (any, error) {
+//	handler := durable.WithDurableExecution(func(event MyEvent, ctx context.Context) (MyResult, error) {
+//	    data, err := operations.Step(ctx, "fetch-user", func(sc context.Context) (any, error) {
 //	        return fetchUser(event.UserID)
-//	    }, nil)
+//	    })
 //	    if err != nil {
 //	        return MyResult{}, err
 //	    }
@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/checkpoint"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/client"
 	durableCtx "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
@@ -49,7 +50,11 @@ type Config struct {
 //
 //	TEvent  – type of the deserialized Lambda input event
 //	TResult – type of the value returned by the handler
-type HandlerFunc[TEvent any, TResult any] func(event TEvent, ctx types.DurableContext) (TResult, error)
+//
+// The ctx argument is a standard context.Context with a DurableContext embedded.
+// Retrieve it via durablecontext.GetDurableContext(ctx), or pass ctx directly to
+// the operations package functions (Step, Wait, Map, etc.).
+type HandlerFunc[TEvent any, TResult any] func(ctx context.Context, event TEvent) (TResult, error)
 
 // LambdaHandler is the AWS Lambda-compatible handler type returned by WithDurableExecution.
 // Register it with the Lambda runtime:
@@ -105,12 +110,12 @@ func WithDurableExecution[TEvent any, TResult any](
 		lambdaCtx := extractLambdaContext(goCtx)
 
 		// Initialize the execution context (loads full operation history, handles pagination)
-		execCtx, mode, checkpointToken, err := durableCtx.InitializeExecutionContext(event, lambdaCtx, backendClient)
+		execCtx, mode, checkpointToken, err := durableCtx.InitializeExecutionContext(goCtx, event, lambdaCtx, backendClient)
 		if err != nil {
 			return failedOutput(err), nil
 		}
 
-		return runHandler(execCtx, lambdaCtx, mode, checkpointToken, handler)
+		return runHandler(goCtx, execCtx, lambdaCtx, mode, checkpointToken, handler)
 	}
 }
 
@@ -123,6 +128,7 @@ func WithDurableExecution[TEvent any, TResult any](
 //  4. Races the handler goroutine against the termination manager channel.
 //  5. Returns the appropriate DurableExecutionInvocationOutput.
 func runHandler[TEvent any, TResult any](
+	goCtx context.Context,
 	execCtx *checkpoint.ExecutionContext,
 	lambdaCtx *types.LambdaContext,
 	mode types.DurableExecutionMode,
@@ -143,8 +149,8 @@ func runHandler[TEvent any, TResult any](
 	// Ensure the checkpoint manager is told to stop when execution terminates
 	execCtx.TerminationManager.RegisterTerminationCallback(mgr.SetTerminating)
 
-	// Create the root DurableContext
-	dc := durableCtx.NewRootContext(execCtx, lambdaCtx, mgr, mode, logger)
+	// Create the root DurableContext embedded in a context.Context
+	ctx := durableCtx.NewRootContext(goCtx, execCtx, lambdaCtx, mgr, mode, logger)
 
 	// Extract the customer's event from the first operation's InputPayload
 	var userEvent TEvent
@@ -159,7 +165,7 @@ func runHandler[TEvent any, TResult any](
 	}
 	handlerCh := make(chan result, 1)
 	go func() {
-		v, err := handler(userEvent, dc)
+		v, err := handler(ctx, userEvent)
 		handlerCh <- result{value: v, err: err}
 	}()
 
@@ -167,7 +173,9 @@ func runHandler[TEvent any, TResult any](
 	select {
 	case hr := <-handlerCh:
 		// Flush any in-flight checkpoints before returning
-		_ = mgr.WaitForQueueCompletion()
+		if flushErr := mgr.WaitForQueueCompletion(); flushErr != nil {
+			return failedOutput(flushErr), nil
+		}
 
 		if hr.err != nil {
 			if durableErrors.IsUnrecoverableInvocationError(hr.err) {
@@ -186,13 +194,17 @@ func runHandler[TEvent any, TResult any](
 		// Check Lambda response size limit; checkpoint large results
 		if len(resultBytes) > lambdaResponseSizeLimit {
 			stepID := fmt.Sprintf("execution-result-%d", time.Now().UnixMilli())
-			_ = mgr.Checkpoint(stepID, types.OperationUpdate{
+			if cpErr := mgr.Checkpoint(goCtx, stepID, types.OperationUpdate{
 				Id:      stepID,
 				Action:  types.OperationActionSucceed,
 				Type:    types.OperationTypeExecution,
 				Payload: &resultStr,
-			})
-			_ = mgr.WaitForQueueCompletion()
+			}); cpErr != nil {
+				return failedOutput(fmt.Errorf("failed to checkpoint oversized result: %w", cpErr)), nil
+			}
+			if flushErr := mgr.WaitForQueueCompletion(); flushErr != nil {
+				return failedOutput(flushErr), nil
+			}
 
 			empty := ""
 			return types.DurableExecutionInvocationOutput{
@@ -207,6 +219,7 @@ func runHandler[TEvent any, TResult any](
 		}, nil
 
 	case term := <-execCtx.TerminationManager.TerminationChannel():
+		// Best-effort flush — errors here are secondary to the termination reason
 		_ = mgr.WaitForQueueCompletion()
 
 		switch term.Reason {
@@ -263,10 +276,12 @@ func firstOperationWithInput(execCtx *checkpoint.ExecutionContext) *types.Operat
 }
 
 func extractLambdaContext(ctx context.Context) *types.LambdaContext {
-	// Best-effort extraction of Lambda invocation metadata from the context.
-	// The aws-lambda-go runtime stores these under unexported keys; here we
-	// fall back to a minimal context and let callers fill it in via Config if needed.
-	lc := &types.LambdaContext{}
-	_ = ctx // suppress unused warning
-	return lc
+	lc, ok := lambdacontext.FromContext(ctx)
+	if !ok {
+		return &types.LambdaContext{}
+	}
+	return &types.LambdaContext{
+		AwsRequestID:       lc.AwsRequestID,
+		InvokedFunctionArn: lc.InvokedFunctionArn,
+	}
 }

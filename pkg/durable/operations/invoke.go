@@ -1,10 +1,12 @@
 package operations
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	durableCtx "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
 	durableErrors "github.com/aws/durable-execution-sdk-go/pkg/durable/errors"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/utils"
@@ -51,15 +53,27 @@ func newInvokeRunner[TIn, TOut any](
 // ---------------------------------------------------------------------------
 
 func Invoke[TIn, TOut any](
-	d types.DurableContext,
+	ctx context.Context,
 	name string,
 	funcID string,
 	input TIn,
 	opts ...InvokeOption[TIn, TOut],
 ) (TOut, error) {
+	d := durableCtx.GetDurableContext(ctx)
 	r := newInvokeRunner[TIn, TOut](d, name, funcID, input, opts)
 
 	stored := r.d.GetStepData(r.stepID)
+
+	subType := types.OperationSubTypeChainedInvoke
+	if err := durableCtx.ValidateReplayConsistency(r.stepID, types.OperationTypeChainedInvoke, r.namePtr, &subType, stored); err != nil {
+		r.d.Terminate(types.TerminationResult{
+			Reason:  types.TerminationReasonContextValidationError,
+			Error:   err,
+			Message: err.Error(),
+		})
+		var zero TOut
+		return zero, err
+	}
 
 	switch {
 	case stored != nil && stored.Status == types.OperationStatusSucceeded:
@@ -69,7 +83,7 @@ func Invoke[TIn, TOut any](
 	case stored != nil && stored.Status == types.OperationStatusStarted:
 		return r.suspendStarted()
 	default:
-		return r.startFresh()
+		return r.startFresh(ctx)
 	}
 }
 
@@ -103,7 +117,7 @@ func (r *InvokeRunner[TIn, TOut]) suspendStarted() (TOut, error) {
 	return zero, &durableErrors.TerminatedError{Message: "execution terminated waiting for completion"}
 }
 
-func (r *InvokeRunner[TIn, TOut]) startFresh() (TOut, error) {
+func (r *InvokeRunner[TIn, TOut]) startFresh(ctx context.Context) (TOut, error) {
 	var zero TOut
 	r.d.Logger().Info(fmt.Sprintf("Chained invoke %s not in replay state, invoking %s", r.stepID, r.funcID))
 
@@ -112,7 +126,7 @@ func (r *InvokeRunner[TIn, TOut]) startFresh() (TOut, error) {
 		return zero, err
 	}
 
-	if err := r.checkpointStart(inputStr); err != nil {
+	if err := r.checkpointStart(ctx, inputStr); err != nil {
 		return zero, err
 	}
 
@@ -127,8 +141,9 @@ func (r *InvokeRunner[TIn, TOut]) startFresh() (TOut, error) {
 // Checkpointing
 // ---------------------------------------------------------------------------
 
-func (r *InvokeRunner[TIn, TOut]) checkpointStart(inputStr string) error {
-	r.d.Logger().Info(fmt.Sprintf("About to checkpoint START for %s", r.stepID))
+func (r *InvokeRunner[TIn, TOut]) checkpointStart(ctx context.Context, inputStr string) error {
+	dctx := durableCtx.GetDurableContext(ctx)
+	dctx.Logger().Info(fmt.Sprintf("About to checkpoint START for %s", r.stepID))
 
 	update := types.OperationUpdate{
 		Id:      r.stepID,
@@ -142,11 +157,11 @@ func (r *InvokeRunner[TIn, TOut]) checkpointStart(inputStr string) error {
 		Payload: &inputStr,
 	}
 
-	if r.d.ParentID() != "" {
-		update.ParentId = aws.String(r.d.ParentID())
+	if dctx.ParentID() != "" {
+		update.ParentId = aws.String(dctx.ParentID())
 	}
 
-	return r.d.Checkpoint(r.stepID, update)
+	return dctx.Checkpoint(ctx, r.stepID, update)
 }
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ package utils
 import (
 	"math"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
@@ -111,16 +112,7 @@ func isRetryable(err error, retryableErrors []string) bool {
 }
 
 func containsSubstring(s, sub string) bool {
-	return len(sub) > 0 && len(s) >= len(sub) && searchString(s, sub)
-}
-
-func searchString(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
+	return len(sub) > 0 && strings.Contains(s, sub)
 }
 
 func applyJitter(seconds float64, strategy types.JitterStrategy) float64 {

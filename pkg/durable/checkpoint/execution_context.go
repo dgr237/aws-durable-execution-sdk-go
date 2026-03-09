@@ -13,7 +13,7 @@ import (
 // Client is the interface for communicating with the durable execution backend.
 type Client interface {
 	Checkpoint(ctx context.Context, params types.CheckpointDurableExecutionRequest) (*types.CheckpointDurableExecutionResponse, error)
-	GetExecutionState(params types.GetDurableExecutionStateRequest) (*types.GetDurableExecutionStateResponse, error)
+	GetExecutionState(ctx context.Context, params types.GetDurableExecutionStateRequest) (*types.GetDurableExecutionStateResponse, error)
 }
 
 // hashStepID hashes a step ID exactly as the JS SDK does (MD5, 16 hex chars).

@@ -62,6 +62,8 @@ const (
 	OperationActionStart   OperationAction = "START"
 	OperationActionSucceed OperationAction = "SUCCEED"
 	OperationActionFail    OperationAction = "FAIL"
+	OperationActionRetry   OperationAction = "RETRY"
+	OperationActionCancel  OperationAction = "CANCEL"
 )
 
 // OperationSubType provides fine-grained categorization of durable operations.
@@ -396,6 +398,33 @@ type BatchResultItem[T any] struct {
 type BatchResult[T any] struct {
 	// Items contains all results (both successes and failures).
 	Items []BatchResultItem[T]
+	// CompletionReason describes why the batch completed (e.g. "ALL_SUCCEEDED", "MIN_SUCCESSFUL_MET", "MAX_FAILURES_REACHED").
+	CompletionReason string
+}
+
+// TotalCount returns the total number of items in the batch.
+func (b BatchResult[T]) TotalCount() int { return len(b.Items) }
+
+// SuccessCount returns the number of successfully completed items.
+func (b BatchResult[T]) SuccessCount() int {
+	count := 0
+	for _, item := range b.Items {
+		if item.Err == nil {
+			count++
+		}
+	}
+	return count
+}
+
+// FailureCount returns the number of failed items.
+func (b BatchResult[T]) FailureCount() int {
+	count := 0
+	for _, item := range b.Items {
+		if item.Err != nil {
+			count++
+		}
+	}
+	return count
 }
 
 // Values returns only the successful values from the batch result.
@@ -409,6 +438,20 @@ func (b BatchResult[T]) Values() []T {
 	return result
 }
 
+// GetErrors returns only the errors from failed items.
+func (b BatchResult[T]) GetErrors() []error {
+	var errs []error
+	for _, item := range b.Items {
+		if item.Err != nil {
+			errs = append(errs, item.Err)
+		}
+	}
+	return errs
+}
+
+// GetItems returns all items (both successes and failures).
+func (b BatchResult[T]) GetItems() []BatchResultItem[T] { return b.Items }
+
 // HasErrors returns true if any batch item failed.
 func (b BatchResult[T]) HasErrors() bool {
 	for _, item := range b.Items {
@@ -417,6 +460,16 @@ func (b BatchResult[T]) HasErrors() bool {
 		}
 	}
 	return false
+}
+
+// ThrowIfErrors returns the first error encountered, or nil if all items succeeded.
+func (b BatchResult[T]) ThrowIfErrors() error {
+	for _, item := range b.Items {
+		if item.Err != nil {
+			return item.Err
+		}
+	}
+	return nil
 }
 
 // LambdaContext is a simplified Lambda context passed to handlers.
@@ -474,7 +527,7 @@ type NamedParallelBranch[T any] struct {
 	// Name is the branch identifier.
 	Name string
 	// Fn is the branch function to execute.
-	Fn func(ctx DurableContext) (T, error)
+	Fn func(ctx context.Context) (T, error)
 }
 
 // PromiseSettledResult represents the outcome of a settled promise.
@@ -502,24 +555,24 @@ type callbackOutcome[T any] struct {
 
 // DurableContext is the main interface passed to durable handlers.
 // It provides all methods for durable operations with automatic checkpointing and replay.
+// A DurableContext is always retrieved from a context.Context via GetDurableContext(ctx).
 type DurableContext interface {
 	// LambdaCtx returns the underlying Lambda context.
 	LambdaCtx() *LambdaContext
-	Context() context.Context
 	// Logger returns the logger for this context (mode-aware; silent during replay).
 	Logger() Logger
 	// ConfigureLogger updates logger configuration.
 	ConfigureLogger(config LoggerConfig)
 
 	NextStepID() string
-	Checkpoint(stepID string, update OperationUpdate) error
-	CheckpointBatch(batch []OperationUpdate) error
+	Checkpoint(ctx context.Context, stepID string, update OperationUpdate) error
+	CheckpointBatch(ctx context.Context, batch []OperationUpdate) error
 	ParentID() string
-	NewChildDurableContext(prefix string, parentID string, mode DurableExecutionMode) DurableContext
+	// NewChildDurableContext creates a child DurableContext embedded into a new context.Context derived from goCtx.
+	NewChildDurableContext(goCtx context.Context, prefix string, parentID string, mode DurableExecutionMode) context.Context
 	Mode() DurableExecutionMode
 	MarkOperationState(stepID string, state OperationLifecycleState, metadata OperationMetadata)
 	MarkAncestorFinished(stepID string)
-	NewStepContext() StepContext
 	IsTerminated() bool
 	Terminate(result TerminationResult)
 	GetStepData(stepID string) *Operation
@@ -527,9 +580,9 @@ type DurableContext interface {
 }
 
 // StepContext is passed to step functions for logging (not full durable operations).
+// A StepContext is always retrieved from a context.Context via GetStepContext(ctx).
 type StepContext interface {
 	Logger() Logger
-	Context() context.Context
 }
 
 // StepResult is a typed result channel item from a durable operation.
