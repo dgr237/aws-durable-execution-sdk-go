@@ -47,7 +47,7 @@ func Wait(ctx context.Context, name string, duration types.Duration) error {
 
 	stored := r.d.GetStepData(r.stepID)
 
-	if err := durableCtx.ValidateReplayConsistency(r.stepID, types.OperationTypeStep, r.namePtr, &r.subType, stored); err != nil {
+	if err := durableCtx.ValidateReplayConsistency(r.stepID, types.OperationTypeWait, r.namePtr, &r.subType, stored); err != nil {
 		r.d.Terminate(types.TerminationResult{
 			Reason:  types.TerminationReasonContextValidationError,
 			Error:   err,
@@ -80,7 +80,7 @@ func (r *WaitRunner) startFresh(ctx context.Context) error {
 	if err := r.d.Checkpoint(ctx, r.stepID, types.OperationUpdate{
 		Id:      r.stepID,
 		Action:  types.OperationActionStart,
-		Type:    types.OperationTypeStep,
+		Type:    types.OperationTypeWait,
 		SubType: &r.subType,
 		Name:    r.namePtr,
 		WaitOptions: &types.WaitOptions{
@@ -107,7 +107,7 @@ func (r *WaitRunner) markCompleted() {
 	r.d.MarkOperationState(r.stepID, types.OperationLifecycleStateCompleted, types.OperationMetadata{
 		StepId:  r.stepID,
 		Name:    r.namePtr,
-		Type:    types.OperationTypeStep,
+		Type:    types.OperationTypeWait,
 		SubType: &r.subType,
 	})
 }
