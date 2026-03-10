@@ -221,7 +221,11 @@ func (r *WaitForConditionRunner[TState]) checkpointSucceeded(ctx context.Context
 
 	serialized, serErr := utils.SafeSerialize[TState](r.serdes, state, r.childStepID, r.d.DurableExecutionArn())
 	if serErr != nil {
-		return zero, serErr
+		r.d.Terminate(types.TerminationResult{
+			Reason:  types.TerminationReasonSerdesFailed,
+			Message: fmt.Sprintf("failed to serialize condition state for %q: %v", r.name, serErr),
+		})
+		return zero, &durableErrors.SerdesFailedError{Message: serErr.Error()}
 	}
 	var payloadPtr *string
 	if serialized != "" {

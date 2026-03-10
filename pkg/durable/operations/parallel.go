@@ -197,6 +197,8 @@ func (r *ParallelRunner[TOut]) collectCompletedBranches(results []TOut, errs []e
 			r.d.Logger().Info(fmt.Sprintf("Parallel branch %s already failed, skipping execution", branchName))
 			if stored.Error != nil {
 				errs[i] = utils.ErrorFromErrorObject(stored.Error)
+			} else {
+				errs[i] = fmt.Errorf("parallel branch %s failed with no error detail", branchName)
 			}
 		default:
 			pending = append(pending, i)

@@ -194,6 +194,8 @@ func (r *MapRunner[TIn, TOut]) checkpointMapStart(ctx context.Context, results [
 		case iterStored != nil && iterStored.Status == types.OperationStatusFailed:
 			if iterStored.Error != nil {
 				errs[i] = utils.ErrorFromErrorObject(iterStored.Error)
+			} else {
+				errs[i] = fmt.Errorf("map iteration %s failed with no error detail", iterName)
 			}
 			continue
 		}
