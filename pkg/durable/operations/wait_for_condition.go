@@ -1,7 +1,6 @@
 package operations
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -19,7 +18,7 @@ type WaitForConditionRunner[TState any] struct {
 	d            types.DurableContext
 	name         string
 	namePtr      *string
-	checkFn      func(state TState, ctx context.Context) (TState, error)
+	checkFn      func(sc types.StepContext, state TState) (TState, error)
 	initialState TState
 	serdes       types.Serdes
 	waitStrategy func(state TState, attempt int) types.WaitStrategyResult
@@ -30,7 +29,7 @@ type WaitForConditionRunner[TState any] struct {
 func newWaitForConditionRunner[TState any](
 	d types.DurableContext,
 	name string,
-	checkFn func(state TState, ctx context.Context) (TState, error),
+	checkFn func(sc types.StepContext, state TState) (TState, error),
 	initialState TState,
 	opts []WaitForConditionOption[TState],
 ) *WaitForConditionRunner[TState] {
@@ -58,17 +57,13 @@ func newWaitForConditionRunner[TState any](
 // initialState is the required starting value for the condition state machine;
 // all other settings are provided via functional options.
 func WaitForCondition[TState any](
-	ctx context.Context,
+	dc types.DurableContext,
 	name string,
-	checkFn func(state TState, ctx context.Context) (TState, error),
+	checkFn func(sc types.StepContext, state TState) (TState, error),
 	initialState TState,
 	opts ...WaitForConditionOption[TState],
 ) (TState, error) {
-	d, err := durableCtx.GetDurableContext(ctx)
-	if err != nil {
-		panic("durable: no DurableContext found in ctx — pass the context.Context received by your HandlerFunc, not context.Background()")
-	}
-	r := newWaitForConditionRunner[TState](d, name, checkFn, initialState, opts)
+	r := newWaitForConditionRunner[TState](dc, name, checkFn, initialState, opts)
 
 	stored := r.d.GetStepData(r.childStepID)
 
@@ -88,7 +83,7 @@ func WaitForCondition[TState any](
 	case stored != nil && stored.Status == types.OperationStatusFailed:
 		return r.replayFailed(stored)
 	default:
-		return r.poll(ctx)
+		return r.poll()
 	}
 }
 
@@ -113,26 +108,26 @@ func (r *WaitForConditionRunner[TState]) replayFailed(stored *types.Operation) (
 	return zero, durableErrors.NewWaitConditionError(r.childStepID, r.namePtr, cause)
 }
 
-func (r *WaitForConditionRunner[TState]) poll(ctx context.Context) (TState, error) {
+func (r *WaitForConditionRunner[TState]) poll() (TState, error) {
 	var zero TState
 
 	state := r.recoverState()
-	// Build a step context.Context from the durable context
-	stepCtxGo := durableCtx.NewStepContextFrom(ctx)
+	// Build a StepContext from the durable context
+	sc := durableCtx.NewStepContext(r.d)
 
 	for attempt := 1; ; attempt++ {
-		newState, err := r.checkFn(state, stepCtxGo)
+		newState, err := r.checkFn(sc, state)
 		if err != nil {
-			return zero, r.checkpointFailed(ctx, err)
+			return zero, r.checkpointFailed(err)
 		}
 		state = newState
 
-		if done := r.applyWaitStrategy(ctx, state, attempt); done {
+		if done := r.applyWaitStrategy(state, attempt); done {
 			break
 		}
 	}
 
-	return r.checkpointSucceeded(ctx, state)
+	return r.checkpointSucceeded(state)
 }
 
 func (r *WaitForConditionRunner[TState]) recoverState() TState {
@@ -151,7 +146,7 @@ func (r *WaitForConditionRunner[TState]) recoverState() TState {
 // Poll loop helpers
 // ---------------------------------------------------------------------------
 
-func (r *WaitForConditionRunner[TState]) applyWaitStrategy(ctx context.Context, state TState, attempt int) (done bool) {
+func (r *WaitForConditionRunner[TState]) applyWaitStrategy(state TState, attempt int) (done bool) {
 	if r.waitStrategy == nil {
 		return true
 	}
@@ -166,11 +161,11 @@ func (r *WaitForConditionRunner[TState]) applyWaitStrategy(ctx context.Context, 
 		return false
 	}
 
-	r.suspendForRetry(ctx, result.Delay, state)
+	r.suspendForRetry(result.Delay, state)
 	return false
 }
 
-func (r *WaitForConditionRunner[TState]) suspendForRetry(ctx context.Context, delay *types.Duration, state TState) {
+func (r *WaitForConditionRunner[TState]) suspendForRetry(delay *types.Duration, state TState) {
 	waitSeconds := int32(delay.ToSeconds())
 
 	serialized, serErr := utils.SafeSerialize[TState](r.serdes, state, r.childStepID, r.d.DurableExecutionArn())
@@ -186,7 +181,7 @@ func (r *WaitForConditionRunner[TState]) suspendForRetry(ctx context.Context, de
 		payloadPtr = &serialized
 	}
 
-	if cpErr := r.d.Checkpoint(ctx, r.childStepID, types.OperationUpdate{
+	if cpErr := r.d.Checkpoint(r.childStepID, types.OperationUpdate{
 		Id:      r.childStepID,
 		Action:  types.OperationActionRetry,
 		Type:    types.OperationTypeStep,
@@ -216,7 +211,7 @@ func (r *WaitForConditionRunner[TState]) suspendForRetry(ctx context.Context, de
 // Checkpointing
 // ---------------------------------------------------------------------------
 
-func (r *WaitForConditionRunner[TState]) checkpointSucceeded(ctx context.Context, state TState) (TState, error) {
+func (r *WaitForConditionRunner[TState]) checkpointSucceeded(state TState) (TState, error) {
 	var zero TState
 
 	serialized, serErr := utils.SafeSerialize[TState](r.serdes, state, r.childStepID, r.d.DurableExecutionArn())
@@ -232,7 +227,7 @@ func (r *WaitForConditionRunner[TState]) checkpointSucceeded(ctx context.Context
 		payloadPtr = &serialized
 	}
 
-	if err := r.d.Checkpoint(ctx, r.childStepID, types.OperationUpdate{
+	if err := r.d.Checkpoint(r.childStepID, types.OperationUpdate{
 		Id:      r.childStepID,
 		Action:  types.OperationActionSucceed,
 		Type:    types.OperationTypeStep,
@@ -246,8 +241,8 @@ func (r *WaitForConditionRunner[TState]) checkpointSucceeded(ctx context.Context
 	return state, nil
 }
 
-func (r *WaitForConditionRunner[TState]) checkpointFailed(ctx context.Context, err error) error {
-	if cpErr := r.d.Checkpoint(ctx, r.childStepID, types.OperationUpdate{
+func (r *WaitForConditionRunner[TState]) checkpointFailed(err error) error {
+	if cpErr := r.d.Checkpoint(r.childStepID, types.OperationUpdate{
 		Id:      r.childStepID,
 		Action:  types.OperationActionFail,
 		Type:    types.OperationTypeStep,

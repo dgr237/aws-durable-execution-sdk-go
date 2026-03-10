@@ -1,7 +1,6 @@
 package operations
 
 import (
-	"context"
 	"fmt"
 
 	durableCtx "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
@@ -18,7 +17,7 @@ type ChildContextRunner[T any] struct {
 	d            types.DurableContext
 	name         string
 	namePtr      *string
-	fn           func(ctx context.Context) (T, error)
+	fn           func(dc types.DurableContext) (T, error)
 	serdes       types.Serdes
 	childSubType *types.OperationSubType
 	stepID       string
@@ -27,7 +26,7 @@ type ChildContextRunner[T any] struct {
 func newChildContextRunner[T any](
 	d types.DurableContext,
 	name string,
-	fn func(ctx context.Context) (T, error),
+	fn func(dc types.DurableContext) (T, error),
 	opts []ChildContextOption[T],
 ) *ChildContextRunner[T] {
 	defaultSubType := types.OperationSubTypeRunInChildContext
@@ -51,19 +50,15 @@ func newChildContextRunner[T any](
 // ---------------------------------------------------------------------------
 
 func RunInChildContext[T any](
-	ctx context.Context,
+	dc types.DurableContext,
 	name string,
-	fn func(ctx context.Context) (T, error),
+	fn func(dc types.DurableContext) (T, error),
 	opts ...ChildContextOption[T],
 ) (T, error) {
-	d, err := durableCtx.GetDurableContext(ctx)
-	if err != nil {
-		panic("durable: no DurableContext found in ctx — pass the context.Context received by your HandlerFunc, not context.Background()")
-	}
-	r := newChildContextRunner[T](d, name, fn, opts)
+	r := newChildContextRunner[T](dc, name, fn, opts)
 
 	subType := types.OperationSubTypeRunInChildContext
-	stored := d.GetStepData(r.stepID)
+	stored := dc.GetStepData(r.stepID)
 
 	if err := durableCtx.ValidateReplayConsistency(r.stepID, types.OperationTypeStep, r.namePtr, &subType, stored); err != nil {
 		r.d.Terminate(types.TerminationResult{
@@ -79,9 +74,9 @@ func RunInChildContext[T any](
 	case stored != nil && stored.Status == types.OperationStatusSucceeded:
 		return r.replaySucceeded(stored)
 	case stored != nil && stored.Status == types.OperationStatusFailed:
-		return r.replayFailed(ctx, stored)
+		return r.replayFailed(stored)
 	default:
-		return r.startFresh(ctx)
+		return r.startFresh()
 	}
 }
 
@@ -104,7 +99,7 @@ func (r *ChildContextRunner[T]) replaySucceeded(stored *types.Operation) (T, err
 	return result, nil
 }
 
-func (r *ChildContextRunner[T]) replayFailed(ctx context.Context, stored *types.Operation) (T, error) {
+func (r *ChildContextRunner[T]) replayFailed(stored *types.Operation) (T, error) {
 	var zero T
 	r.d.MarkAncestorFinished(r.stepID)
 
@@ -115,24 +110,24 @@ func (r *ChildContextRunner[T]) replayFailed(ctx context.Context, stored *types.
 	return zero, durableErrors.NewChildContextError(r.stepID, r.namePtr, cause)
 }
 
-func (r *ChildContextRunner[T]) startFresh(ctx context.Context) (T, error) {
-	childGoCtx := r.d.NewChildDurableContext(ctx, r.stepID, r.stepID, r.d.Mode())
-	result, err := r.fn(childGoCtx)
+func (r *ChildContextRunner[T]) startFresh() (T, error) {
+	childDc := r.d.NewChildDurableContext(r.d.Context(), r.stepID, r.stepID, r.d.Mode())
+	result, err := r.fn(childDc)
 
 	if err != nil {
-		return r.handleExecutionError(ctx, err)
+		return r.handleExecutionError(err)
 	}
 
-	return r.handleExecutionSuccess(ctx, result)
+	return r.handleExecutionSuccess(result)
 }
 
 // ---------------------------------------------------------------------------
 // Result handling
 // ---------------------------------------------------------------------------
 
-func (r *ChildContextRunner[T]) handleExecutionError(ctx context.Context, err error) (T, error) {
+func (r *ChildContextRunner[T]) handleExecutionError(err error) (T, error) {
 	var zero T
-	if cpErr := r.d.Checkpoint(ctx, r.stepID, types.OperationUpdate{
+	if cpErr := r.d.Checkpoint(r.stepID, types.OperationUpdate{
 		Id:      r.stepID,
 		Action:  types.OperationActionFail,
 		Type:    types.OperationTypeStep,
@@ -151,7 +146,7 @@ func (r *ChildContextRunner[T]) handleExecutionError(ctx context.Context, err er
 	return zero, durableErrors.NewChildContextError(r.stepID, r.namePtr, err)
 }
 
-func (r *ChildContextRunner[T]) handleExecutionSuccess(ctx context.Context, result T) (T, error) {
+func (r *ChildContextRunner[T]) handleExecutionSuccess(result T) (T, error) {
 	var zero T
 
 	serialized, serErr := utils.SafeSerialize(r.serdes, result, r.stepID, r.d.DurableExecutionArn())
@@ -168,7 +163,7 @@ func (r *ChildContextRunner[T]) handleExecutionSuccess(ctx context.Context, resu
 		payloadPtr = &serialized
 	}
 
-	if err := r.d.Checkpoint(ctx, r.stepID, types.OperationUpdate{
+	if err := r.d.Checkpoint(r.stepID, types.OperationUpdate{
 		Id:      r.stepID,
 		Action:  types.OperationActionSucceed,
 		Type:    types.OperationTypeStep,

@@ -31,11 +31,10 @@ package durable
 // Use them outside of durable operations to keep your handler deterministic.
 
 import (
-	"context"
 	"errors"
 	"time"
 
-	durableCtx "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
+	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 )
 
 // CurrentTime returns the start time of the current durable execution, derived
@@ -47,16 +46,12 @@ import (
 //
 // Example:
 //
-//	startedAt, err := durable.CurrentTime(ctx)
+//	startedAt, err := durable.CurrentTime(dc)
 //	if err != nil {
 //	    return Result{}, err
 //	}
 //	// Use startedAt instead of time.Now()
-func CurrentTime(ctx context.Context) (time.Time, error) {
-	dc, err := durableCtx.GetDurableContext(ctx)
-	if err != nil {
-		return time.Time{}, errors.New("durable.CurrentTime: no DurableContext in ctx — pass the context.Context from your HandlerFunc")
-	}
+func CurrentTime(dc types.DurableContext) (time.Time, error) {
 	t, ok := dc.ExecutionStartTime()
 	if !ok {
 		return time.Time{}, errors.New("durable.CurrentTime: execution start time unavailable — EXECUTION operation has no StartTimestamp")
