@@ -547,7 +547,7 @@ type NamedParallelBranch[T any] struct {
 	// Name is the branch identifier.
 	Name string
 	// Fn is the branch function to execute.
-	Fn func(ctx context.Context) (T, error)
+	Fn func(ctx context.Context, dc DurableContext) (T, error)
 }
 
 // PromiseSettledResult represents the outcome of a settled promise.
@@ -575,7 +575,6 @@ type callbackOutcome[T any] struct {
 
 // DurableContext is the main interface passed to durable handlers.
 // It provides all methods for durable operations with automatic checkpointing and replay.
-// A DurableContext is always retrieved from a context.Context via GetDurableContext(ctx).
 type DurableContext interface {
 	// LambdaCtx returns the underlying Lambda context.
 	LambdaCtx() *LambdaContext
@@ -583,13 +582,15 @@ type DurableContext interface {
 	Logger() Logger
 	// ConfigureLogger updates logger configuration.
 	ConfigureLogger(config LoggerConfig)
+	// Context returns the underlying Go context.Context stored in this DurableContext.
+	Context() context.Context
 
 	NextStepID() string
-	Checkpoint(ctx context.Context, stepID string, update OperationUpdate) error
-	CheckpointBatch(ctx context.Context, batch []OperationUpdate) error
+	Checkpoint(stepID string, update OperationUpdate) error
+	CheckpointBatch(batch []OperationUpdate) error
 	ParentID() string
-	// NewChildDurableContext creates a child DurableContext embedded into a new context.Context derived from goCtx.
-	NewChildDurableContext(goCtx context.Context, prefix string, parentID string, mode DurableExecutionMode) context.Context
+	// NewChildDurableContext creates a child DurableContext derived from goCtx.
+	NewChildDurableContext(goCtx context.Context, prefix string, parentID string, mode DurableExecutionMode) DurableContext
 	Mode() DurableExecutionMode
 	MarkOperationState(stepID string, state OperationLifecycleState, metadata OperationMetadata)
 	MarkAncestorFinished(stepID string)
@@ -603,10 +604,11 @@ type DurableContext interface {
 	ExecutionStartTime() (time.Time, bool)
 }
 
-// StepContext is passed to step functions for logging (not full durable operations).
-// A StepContext is always retrieved from a context.Context via GetStepContext(ctx).
+// StepContext is passed to step functions for I/O inside step callbacks.
 type StepContext interface {
 	Logger() Logger
+	// Context returns the underlying Go context.Context for use with I/O operations.
+	Context() context.Context
 }
 
 // StepResult is a typed result channel item from a durable operation.

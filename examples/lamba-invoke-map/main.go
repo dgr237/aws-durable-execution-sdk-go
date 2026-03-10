@@ -20,7 +20,6 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable"
-	durablecontext "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/operations"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 )
@@ -54,16 +53,16 @@ func main() {
 	lambda.Start(durable.WithDurableExecution[Event, MainResult](mainHandler, nil))
 }
 
-func mainHandler(ctx context.Context, event Event) (MainResult, error) {
-	startTime := getStartTime(ctx)
+func mainHandler(ctx context.Context, dc types.DurableContext, event Event) (MainResult, error) {
+	startTime := getStartTime(dc)
 
-	result, err := operations.Step(ctx, "initialize-tasks", initializeFn)
+	result, err := operations.Step(dc, "initialize-tasks", initializeFn)
 	if err != nil {
 		return MainResult{}, fmt.Errorf("initialization failed: %w", err)
 	}
 
 	mapResult, err := operations.Map(
-		ctx,
+		dc,
 		"process-tasks",
 		result,
 		runTaskFn,
@@ -72,30 +71,22 @@ func mainHandler(ctx context.Context, event Event) (MainResult, error) {
 		return MainResult{}, fmt.Errorf("map operation failed: %w", err)
 	}
 
-	res, err := operations.Step[MainResult](ctx, "get-results", aggregateResultsFn(startTime, mapResult))
+	res, err := operations.Step[MainResult](dc, "get-results", aggregateResultsFn(startTime, mapResult))
 	if err != nil {
 		return MainResult{}, fmt.Errorf("failed to get results: %w", err)
 	}
 	return res, nil
 }
 
-func getStartTime(ctx context.Context) time.Time {
-	dc, err := durablecontext.GetDurableContext(ctx)
-	if err != nil {
-		panic("DurableContext not found in context")
-	}
-	startTime, _ := operations.Step(ctx, "start-time", func(stepCtx context.Context) (time.Time, error) {
-		dc.Logger().Info("Starting main execution")
+func getStartTime(dc types.DurableContext) time.Time {
+	startTime, _ := operations.Step(dc, "start-time", func(ctx context.Context, sc types.StepContext) (time.Time, error) {
+		sc.Logger().Info("Starting main execution")
 		return time.Now(), nil
 	})
 	return startTime
 }
 
-func initializeFn(stepCtx context.Context) ([]TaskInput, error) {
-	sc, err := durablecontext.GetStepContext(stepCtx)
-	if err != nil {
-		panic("StepContext not found in context")
-	}
+func initializeFn(ctx context.Context, sc types.StepContext) ([]TaskInput, error) {
 	sc.Logger().Info("Starting main execution with Map operation for 3 tasks")
 	taskConfigs := make([]TaskInput, 3)
 	for i := 0; i < 3; i++ {
@@ -104,29 +95,25 @@ func initializeFn(stepCtx context.Context) ([]TaskInput, error) {
 			WaitTimeMs: waitTimeMs,
 			TaskNumber: i + 1,
 		}
-		sc.Logger().Info("Task %d configured with %d ms wait time", i+1, waitTimeMs)
+		sc.Logger().Info(fmt.Sprintf("Task %d configured with %d ms wait time", i+1, waitTimeMs))
 	}
 	return taskConfigs, nil
 }
 
-func runTaskFn(ctx context.Context, taskInput TaskInput, index int, items []TaskInput) (TaskResult, error) {
-	dc, err := durablecontext.GetDurableContext(ctx)
-	if err != nil {
-		panic("DurableContext not found in context")
-	}
-	dc.Logger().Info("Processing task %d with %d ms wait", taskInput.TaskNumber, taskInput.WaitTimeMs)
+func runTaskFn(ctx context.Context, dc types.DurableContext, taskInput TaskInput, index int, items []TaskInput) (TaskResult, error) {
+	dc.Logger().Info(fmt.Sprintf("Processing task %d with %d ms wait", taskInput.TaskNumber, taskInput.WaitTimeMs))
 
 	taskLambdaArn := os.Getenv("TASK_LAMBDA_NAME")
 	if taskLambdaArn == "" {
 		return TaskResult{}, errors.New("TASK_LAMBDA_NAME environment variable not set")
 	}
 
-	dc.Logger().Info("Using task Lambda ARN: %s", taskLambdaArn)
-	dc.Logger().Info("Invoking task Lambda %s for task %d", taskLambdaArn, taskInput.TaskNumber)
+	dc.Logger().Info(fmt.Sprintf("Using task Lambda ARN: %s", taskLambdaArn))
+	dc.Logger().Info(fmt.Sprintf("Invoking task Lambda %s for task %d", taskLambdaArn, taskInput.TaskNumber))
 
 	invokeName := fmt.Sprintf("invoke-task-%d", taskInput.TaskNumber)
 	taskResult, err := operations.Invoke[TaskInput, TaskResult](
-		ctx,
+		dc,
 		invokeName,
 		taskLambdaArn,
 		taskInput)
@@ -134,18 +121,14 @@ func runTaskFn(ctx context.Context, taskInput TaskInput, index int, items []Task
 		return TaskResult{}, fmt.Errorf("lambda invocation failed: %w", err)
 	}
 
-	dc.Logger().Info("Task %d invocation completed: waited %d ms",
-		taskResult.TaskNumber, taskResult.WaitTimeMs)
+	dc.Logger().Info(fmt.Sprintf("Task %d invocation completed: waited %d ms",
+		taskResult.TaskNumber, taskResult.WaitTimeMs))
 
 	return taskResult, nil
 }
 
-func aggregateResultsFn(startTime time.Time, mapResult types.BatchResult[TaskResult]) func(ctx context.Context) (MainResult, error) {
-	return func(ctx context.Context) (MainResult, error) {
-		sc, err := durablecontext.GetStepContext(ctx)
-		if err != nil {
-			panic("StepContext not found in context")
-		}
+func aggregateResultsFn(startTime time.Time, mapResult types.BatchResult[TaskResult]) func(ctx context.Context, sc types.StepContext) (MainResult, error) {
+	return func(ctx context.Context, sc types.StepContext) (MainResult, error) {
 		taskResults := make([]TaskResult, 0)
 		totalWaitTimeMs := 0
 		errs := make([]error, 0)
@@ -153,20 +136,20 @@ func aggregateResultsFn(startTime time.Time, mapResult types.BatchResult[TaskRes
 			if result.Err == nil {
 				taskResults = append(taskResults, result.Value)
 				totalWaitTimeMs += result.Value.WaitTimeMs
-				sc.Logger().Info("Task %d result: waited %d ms", result.Value.TaskNumber, result.Value.WaitTimeMs)
+				sc.Logger().Info(fmt.Sprintf("Task %d result: waited %d ms", result.Value.TaskNumber, result.Value.WaitTimeMs))
 			} else {
 				errs = append(errs, result.Err)
 			}
 		}
 
 		if len(errs) > 0 {
-			sc.Logger().Warn("Map operation had %d failures", len(errs))
+			sc.Logger().Warn(fmt.Sprintf("Map operation had %d failures", len(errs)))
 		}
 
 		executionTime := time.Since(startTime).Milliseconds()
 
-		sc.Logger().Info("Main execution completed: %d tasks, total wait time: %d ms, execution time: %d ms",
-			len(taskResults), totalWaitTimeMs, executionTime)
+		sc.Logger().Info(fmt.Sprintf("Main execution completed: %d tasks, total wait time: %d ms, execution time: %d ms",
+			len(taskResults), totalWaitTimeMs, executionTime))
 
 		return MainResult{
 			TotalWaitTimeMs: totalWaitTimeMs,

@@ -1,7 +1,6 @@
 package operations
 
 import (
-	"context"
 	"fmt"
 
 	durableCtx "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
@@ -38,12 +37,8 @@ func newWaitRunner(d types.DurableContext, name string, duration types.Duration)
 // Wait — public entry point
 // ---------------------------------------------------------------------------
 
-func Wait(ctx context.Context, name string, duration types.Duration) error {
-	d, err := durableCtx.GetDurableContext(ctx)
-	if err != nil {
-		panic("durable: no DurableContext found in ctx — pass the context.Context received by your HandlerFunc, not context.Background()")
-	}
-	r := newWaitRunner(d, name, duration)
+func Wait(dc types.DurableContext, name string, duration types.Duration) error {
+	r := newWaitRunner(dc, name, duration)
 
 	stored := r.d.GetStepData(r.stepID)
 
@@ -60,7 +55,7 @@ func Wait(ctx context.Context, name string, duration types.Duration) error {
 		return r.replaySucceeded()
 	}
 
-	return r.startFresh(ctx)
+	return r.startFresh()
 }
 
 // ---------------------------------------------------------------------------
@@ -74,10 +69,10 @@ func (r *WaitRunner) replaySucceeded() error {
 }
 
 // startFresh checkpoints the wait START then suspends until the timer elapses.
-func (r *WaitRunner) startFresh(ctx context.Context) error {
+func (r *WaitRunner) startFresh() error {
 	waitSeconds := int32(r.duration.ToSeconds())
 
-	if err := r.d.Checkpoint(ctx, r.stepID, types.OperationUpdate{
+	if err := r.d.Checkpoint(r.stepID, types.OperationUpdate{
 		Id:      r.stepID,
 		Action:  types.OperationActionStart,
 		Type:    types.OperationTypeWait,

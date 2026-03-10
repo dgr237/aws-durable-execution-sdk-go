@@ -1,7 +1,6 @@
 package operations
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 
@@ -53,17 +52,13 @@ func newInvokeRunner[TIn, TOut any](
 // ---------------------------------------------------------------------------
 
 func Invoke[TIn, TOut any](
-	ctx context.Context,
+	dc types.DurableContext,
 	name string,
 	funcID string,
 	input TIn,
 	opts ...InvokeOption[TIn, TOut],
 ) (TOut, error) {
-	d, err := durableCtx.GetDurableContext(ctx)
-	if err != nil {
-		panic("durable: no DurableContext found in ctx — pass the context.Context received by your HandlerFunc, not context.Background()")
-	}
-	r := newInvokeRunner[TIn, TOut](d, name, funcID, input, opts)
+	r := newInvokeRunner[TIn, TOut](dc, name, funcID, input, opts)
 
 	stored := r.d.GetStepData(r.stepID)
 
@@ -86,7 +81,7 @@ func Invoke[TIn, TOut any](
 	case stored != nil && stored.Status == types.OperationStatusStarted:
 		return r.suspendStarted()
 	default:
-		return r.startFresh(ctx)
+		return r.startFresh()
 	}
 }
 
@@ -120,7 +115,7 @@ func (r *InvokeRunner[TIn, TOut]) suspendStarted() (TOut, error) {
 	return zero, &durableErrors.TerminatedError{Message: "execution terminated waiting for completion"}
 }
 
-func (r *InvokeRunner[TIn, TOut]) startFresh(ctx context.Context) (TOut, error) {
+func (r *InvokeRunner[TIn, TOut]) startFresh() (TOut, error) {
 	var zero TOut
 	r.d.Logger().Info(fmt.Sprintf("Chained invoke %s not in replay state, invoking %s", r.stepID, r.funcID))
 
@@ -129,7 +124,7 @@ func (r *InvokeRunner[TIn, TOut]) startFresh(ctx context.Context) (TOut, error) 
 		return zero, err
 	}
 
-	if err := r.checkpointStart(ctx, inputStr); err != nil {
+	if err := r.checkpointStart(inputStr); err != nil {
 		return zero, err
 	}
 
@@ -144,7 +139,7 @@ func (r *InvokeRunner[TIn, TOut]) startFresh(ctx context.Context) (TOut, error) 
 // Checkpointing
 // ---------------------------------------------------------------------------
 
-func (r *InvokeRunner[TIn, TOut]) checkpointStart(ctx context.Context, inputStr string) error {
+func (r *InvokeRunner[TIn, TOut]) checkpointStart(inputStr string) error {
 	r.d.Logger().Info(fmt.Sprintf("About to checkpoint START for %s", r.stepID))
 
 	update := types.OperationUpdate{
@@ -163,7 +158,7 @@ func (r *InvokeRunner[TIn, TOut]) checkpointStart(ctx context.Context, inputStr 
 		update.ParentId = aws.String(r.d.ParentID())
 	}
 
-	return r.d.Checkpoint(ctx, r.stepID, update)
+	return r.d.Checkpoint(r.stepID, update)
 }
 
 // ---------------------------------------------------------------------------

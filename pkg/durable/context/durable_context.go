@@ -2,7 +2,6 @@ package context
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
@@ -24,13 +23,10 @@ func WithDurableContext(ctx context.Context, dc types.DurableContext) context.Co
 }
 
 // GetDurableContext retrieves the DurableContext stored in ctx.
-// Returns nil if none is present.
-func GetDurableContext(ctx context.Context) (types.DurableContext, error) {
+// Returns (nil, false) if none is present.
+func GetDurableContext(ctx context.Context) (types.DurableContext, bool) {
 	dc, ok := ctx.Value(durableContextKey{}).(types.DurableContext)
-	if !ok {
-		return nil, errors.New("no DurableContext found in context")
-	}
-	return dc, nil
+	return dc, ok
 }
 
 // WithStepContext returns a new context.Context carrying sc.
@@ -39,25 +35,28 @@ func WithStepContext(ctx context.Context, sc types.StepContext) context.Context 
 }
 
 // GetStepContext retrieves the StepContext stored in ctx.
-// Returns nil if none is present.
-func GetStepContext(ctx context.Context) (types.StepContext, error) {
+// Returns (nil, false) if none is present.
+func GetStepContext(ctx context.Context) (types.StepContext, bool) {
 	sc, ok := ctx.Value(stepContextKey{}).(types.StepContext)
-	if !ok {
-		return nil, errors.New("no StepContext found in context")
+	return sc, ok
+}
+
+// NewStepContext creates a StepContext from a DurableContext.
+func NewStepContext(dc types.DurableContext) types.StepContext {
+	return &StepContext{
+		logger: dc.Logger(),
+		ctx:    dc.Context(),
 	}
-	return sc, nil
 }
 
 // NewStepContextFrom creates a step context from the DurableContext in goCtx and
-// returns a new context.Context carrying it.
+// returns a new context.Context carrying it. Kept for backward compatibility.
 func NewStepContextFrom(goCtx context.Context) context.Context {
-	dc, err := GetDurableContext(goCtx)
-	if err != nil {
+	dc, ok := GetDurableContext(goCtx)
+	if !ok {
 		panic("no Durable context set")
 	}
-	sc := &StepContext{
-		logger: dc.Logger(),
-	}
+	sc := NewStepContext(dc)
 	return WithStepContext(goCtx, sc)
 }
 
@@ -80,6 +79,7 @@ type DurableContext struct {
 	logger        types.Logger
 	modeAware     bool
 	rawLogger     types.Logger // user-supplied logger (before mode-awareness wrapping)
+	goCtx         context.Context
 }
 
 func (d *DurableContext) GetStepData(stepID string) *types.Operation {
@@ -100,9 +100,11 @@ func (d *DurableContext) ExecutionStartTime() (time.Time, bool) {
 	return op.StartTimestamp.Time, true
 }
 
-// NewChildDurableContext creates a child DurableContext and embeds it into a new
-// context.Context derived from goCtx.
-func (d *DurableContext) NewChildDurableContext(goCtx context.Context, prefix string, parentID string, mode types.DurableExecutionMode) context.Context {
+// Context returns the underlying Go context.Context stored in this DurableContext.
+func (d *DurableContext) Context() context.Context { return d.goCtx }
+
+// NewChildDurableContext creates a child DurableContext derived from goCtx.
+func (d *DurableContext) NewChildDurableContext(goCtx context.Context, prefix string, parentID string, mode types.DurableExecutionMode) types.DurableContext {
 	child := &DurableContext{
 		execCtx:       d.execCtx,
 		lambdaCtx:     d.lambdaCtx,
@@ -113,8 +115,9 @@ func (d *DurableContext) NewChildDurableContext(goCtx context.Context, prefix st
 		logger:        d.logger,
 		rawLogger:     d.rawLogger,
 		modeAware:     d.modeAware,
+		goCtx:         goCtx,
 	}
-	return WithDurableContext(goCtx, child)
+	return child
 }
 
 func (d *DurableContext) IsTerminated() bool {
@@ -132,15 +135,17 @@ func (d *DurableContext) Terminate(result types.TerminationResult) {
 // StepContext is a lightweight context passed to step functions.
 type StepContext struct {
 	logger types.Logger
+	ctx    context.Context
 }
 
-func (s *StepContext) Logger() types.Logger { return s.logger }
+func (s *StepContext) Logger() types.Logger     { return s.logger }
+func (s *StepContext) Context() context.Context { return s.ctx }
 
 // ---------------------------------------------------------------------------
 // Constructors
 // ---------------------------------------------------------------------------
 
-// NewDurableContext creates a new DurableContext and embeds it into the provided goCtx.
+// NewDurableContext creates a new DurableContext and returns it as types.DurableContext.
 func NewDurableContext(
 	goCtx context.Context,
 	execCtx *checkpoint.ExecutionContext,
@@ -148,7 +153,7 @@ func NewDurableContext(
 	checkpointMgr *checkpoint.Manager,
 	mode types.DurableExecutionMode,
 	logger types.Logger,
-) context.Context {
+) types.DurableContext {
 	dc := &DurableContext{
 		execCtx:       execCtx,
 		lambdaCtx:     lambdaCtx,
@@ -157,8 +162,9 @@ func NewDurableContext(
 		logger:        logger,
 		rawLogger:     logger,
 		modeAware:     true,
+		goCtx:         goCtx,
 	}
-	return WithDurableContext(goCtx, dc)
+	return dc
 }
 
 func (d *DurableContext) NextStepID() string {
@@ -187,12 +193,12 @@ func (d *DurableContext) ParentID() string { return d.parentID }
 
 func (d *DurableContext) ExecutionContext() *checkpoint.ExecutionContext { return d.execCtx }
 
-func (d *DurableContext) Checkpoint(ctx context.Context, stepID string, update types.OperationUpdate) error {
-	return d.checkpointMgr.Checkpoint(ctx, stepID, update)
+func (d *DurableContext) Checkpoint(stepID string, update types.OperationUpdate) error {
+	return d.checkpointMgr.Checkpoint(d.goCtx, stepID, update)
 }
 
-func (d *DurableContext) CheckpointBatch(ctx context.Context, batch []types.OperationUpdate) error {
-	return d.checkpointMgr.CheckpointBatch(ctx, batch)
+func (d *DurableContext) CheckpointBatch(batch []types.OperationUpdate) error {
+	return d.checkpointMgr.CheckpointBatch(d.goCtx, batch)
 }
 
 func (d *DurableContext) Mode() types.DurableExecutionMode { return d.mode }

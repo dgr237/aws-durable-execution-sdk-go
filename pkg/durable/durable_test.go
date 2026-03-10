@@ -88,8 +88,8 @@ func TestWithDurableExecution_SimpleStep_FirstInvocation(t *testing.T) {
 	type Evt struct{ Name string }
 	type Res struct{ Greeting string }
 
-	handler := durable.WithDurableExecution(func(ctx context.Context, event Evt) (Res, error) {
-		raw, err := operations.Step(ctx, "greet", func(sc context.Context) (any, error) {
+	handler := durable.WithDurableExecution(func(ctx context.Context, dc types.DurableContext, event Evt) (Res, error) {
+		raw, err := operations.Step(dc, "greet", func(ctx context.Context, sc types.StepContext) (any, error) {
 			return "Hello, " + event.Name, nil
 		})
 		if err != nil {
@@ -143,8 +143,8 @@ func TestWithDurableExecution_StepReplay(t *testing.T) {
 	type Res struct{ Value string }
 
 	stepExecuted := false
-	handler := durable.WithDurableExecution(func(ctx context.Context, event Evt) (Res, error) {
-		raw, err := operations.Step(ctx, "", func(sc context.Context) (any, error) {
+	handler := durable.WithDurableExecution(func(ctx context.Context, dc types.DurableContext, event Evt) (Res, error) {
+		raw, err := operations.Step(dc, "", func(ctx context.Context, sc types.StepContext) (any, error) {
 			stepExecuted = true
 			return "fresh-value", nil
 		})
@@ -171,7 +171,7 @@ func TestWithDurableExecution_StepReplay(t *testing.T) {
 }
 
 func TestWithDurableExecution_InvalidEvent(t *testing.T) {
-	handler := durable.WithDurableExecution(func(ctx context.Context, event any) (any, error) {
+	handler := durable.WithDurableExecution(func(ctx context.Context, dc types.DurableContext, event any) (any, error) {
 		return nil, nil
 	}, &durable.Config{Client: newMockClient()})
 
@@ -195,15 +195,15 @@ func TestWithDurableExecution_MultipleSteps(t *testing.T) {
 		Step2 string
 	}
 
-	handler := durable.WithDurableExecution(func(ctx context.Context, event Evt) (Res, error) {
-		s1, err := operations.Step(ctx, "step-1", func(sc context.Context) (any, error) {
+	handler := durable.WithDurableExecution(func(ctx context.Context, dc types.DurableContext, event Evt) (Res, error) {
+		s1, err := operations.Step(dc, "step-1", func(ctx context.Context, sc types.StepContext) (any, error) {
 			return "result-1", nil
 		})
 		if err != nil {
 			return Res{}, err
 		}
 
-		s2, err := operations.Step(ctx, "step-2", func(sc context.Context) (any, error) {
+		s2, err := operations.Step(dc, "step-2", func(ctx context.Context, sc types.StepContext) (any, error) {
 			return "result-2", nil
 		})
 		if err != nil {
@@ -234,8 +234,8 @@ func TestWithDurableExecution_StepError(t *testing.T) {
 	mock := newMockClient()
 	type Evt struct{}
 
-	handler := durable.WithDurableExecution(func(ctx context.Context, event Evt) (string, error) {
-		_, err := operations.Step(ctx, "failing-step", func(sc context.Context) (any, error) {
+	handler := durable.WithDurableExecution(func(ctx context.Context, dc types.DurableContext, event Evt) (string, error) {
+		_, err := operations.Step(dc, "failing-step", func(ctx context.Context, sc types.StepContext) (any, error) {
 			return nil, fmt.Errorf("intentional failure")
 		}) // no retry
 		if err != nil {
@@ -258,10 +258,10 @@ func TestWithDurableExecution_ChildContext(t *testing.T) {
 	type Evt struct{}
 	type Res struct{ Combined string }
 
-	handler := durable.WithDurableExecution(func(ctx context.Context, event Evt) (Res, error) {
-		raw, err := operations.RunInChildContext(ctx, "group", func(child context.Context) (any, error) {
-			s1, _ := operations.Step(child, "a", func(sc context.Context) (any, error) { return "A", nil })
-			s2, _ := operations.Step(child, "b", func(sc context.Context) (any, error) { return "B", nil })
+	handler := durable.WithDurableExecution(func(ctx context.Context, dc types.DurableContext, event Evt) (Res, error) {
+		raw, err := operations.RunInChildContext(dc, "group", func(ctx context.Context, child types.DurableContext) (any, error) {
+			s1, _ := operations.Step(child, "a", func(ctx context.Context, sc types.StepContext) (any, error) { return "A", nil })
+			s2, _ := operations.Step(child, "b", func(ctx context.Context, sc types.StepContext) (any, error) { return "B", nil })
 			return s1.(string) + s2.(string), nil
 		})
 		if err != nil {

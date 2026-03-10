@@ -22,7 +22,7 @@ type MapRunner[TIn, TOut any] struct {
 	name             string
 	namePtr          *string
 	items            []TIn
-	mapFn            func(ctx context.Context, item TIn, index int, items []TIn) (TOut, error)
+	mapFn            func(ctx context.Context, dc types.DurableContext, item TIn, index int, items []TIn) (TOut, error)
 	serdes           types.Serdes
 	maxConcurrency   int
 	itemNamer        func(item TIn, index int) string
@@ -34,7 +34,7 @@ func newMapRunner[TIn, TOut any](
 	d types.DurableContext,
 	name string,
 	items []TIn,
-	mapFn func(ctx context.Context, item TIn, index int, items []TIn) (TOut, error),
+	mapFn func(ctx context.Context, dc types.DurableContext, item TIn, index int, items []TIn) (TOut, error),
 	opts []MapOption[TIn, TOut],
 ) *MapRunner[TIn, TOut] {
 	r := &MapRunner[TIn, TOut]{
@@ -57,17 +57,13 @@ func newMapRunner[TIn, TOut any](
 // ---------------------------------------------------------------------------
 
 func Map[TIn, TOut any](
-	ctx context.Context,
+	dc types.DurableContext,
 	name string,
 	items []TIn,
-	mapFn func(ctx context.Context, item TIn, index int, items []TIn) (TOut, error),
+	mapFn func(ctx context.Context, dc types.DurableContext, item TIn, index int, items []TIn) (TOut, error),
 	opts ...MapOption[TIn, TOut],
 ) (types.BatchResult[TOut], error) {
-	d, err := durableCtx.GetDurableContext(ctx)
-	if err != nil {
-		panic("durable: no DurableContext found in ctx — pass the context.Context received by your HandlerFunc, not context.Background()")
-	}
-	r := newMapRunner[TIn, TOut](d, name, items, mapFn, opts)
+	r := newMapRunner[TIn, TOut](dc, name, items, mapFn, opts)
 
 	r.d.Logger().Info(fmt.Sprintf("Map function called for %s (stepID: %s)", r.name, r.outerStepID))
 
@@ -87,9 +83,9 @@ func Map[TIn, TOut any](
 	case stored != nil && stored.Status == types.OperationStatusSucceeded:
 		return r.replaySucceeded(stored)
 	case stored != nil && stored.Status == types.OperationStatusStarted:
-		return r.resumeStarted(ctx)
+		return r.resumeStarted()
 	default:
-		return r.startFresh(ctx)
+		return r.startFresh()
 	}
 }
 
@@ -117,7 +113,7 @@ func (r *MapRunner[TIn, TOut]) replaySucceeded(stored *types.Operation) (types.B
 
 // resumeStarted handles a Map whose outer operation is already STARTED.
 // It checks whether all iterations are done; if not, it suspends.
-func (r *MapRunner[TIn, TOut]) resumeStarted(ctx context.Context) (types.BatchResult[TOut], error) {
+func (r *MapRunner[TIn, TOut]) resumeStarted() (types.BatchResult[TOut], error) {
 	r.d.Logger().Info(fmt.Sprintf("Map %s already started, checking iteration status", r.outerStepID))
 
 	if r.anyIterationsInProgress() {
@@ -132,19 +128,19 @@ func (r *MapRunner[TIn, TOut]) resumeStarted(ctx context.Context) (types.BatchRe
 			break
 		}
 	}
-	return r.finalize(ctx, results, errs, reason)
+	return r.finalize(results, errs, reason)
 }
 
 // startFresh checkpoints the Map + all iteration STARTs, executes them, then finalizes.
-func (r *MapRunner[TIn, TOut]) startFresh(ctx context.Context) (types.BatchResult[TOut], error) {
+func (r *MapRunner[TIn, TOut]) startFresh() (types.BatchResult[TOut], error) {
 	results := make([]TOut, len(r.items))
 	errs := make([]error, len(r.items))
 
-	if err := r.checkpointMapStart(ctx, results, errs); err != nil {
+	if err := r.checkpointMapStart(results, errs); err != nil {
 		return types.BatchResult[TOut]{}, err
 	}
 
-	reason, err := r.executeIterations(ctx, results, errs)
+	reason, err := r.executeIterations(results, errs)
 	if err != nil {
 		return types.BatchResult[TOut]{}, err
 	}
@@ -153,7 +149,7 @@ func (r *MapRunner[TIn, TOut]) startFresh(ctx context.Context) (types.BatchResul
 		r.suspend()
 	}
 
-	return r.finalize(ctx, results, errs, reason)
+	return r.finalize(results, errs, reason)
 }
 
 // ---------------------------------------------------------------------------
@@ -162,7 +158,7 @@ func (r *MapRunner[TIn, TOut]) startFresh(ctx context.Context) (types.BatchResul
 
 // checkpointMapStart sends the atomic batch: Map START + all new iteration STARTs.
 // It also pre-populates results/errs for iterations that already have stored state.
-func (r *MapRunner[TIn, TOut]) checkpointMapStart(ctx context.Context, results []TOut, errs []error) error {
+func (r *MapRunner[TIn, TOut]) checkpointMapStart(results []TOut, errs []error) error {
 	subType := types.OperationSubTypeMap
 	iterSubType := types.OperationSubTypeMapIteration
 
@@ -213,7 +209,7 @@ func (r *MapRunner[TIn, TOut]) checkpointMapStart(ctx context.Context, results [
 	}
 
 	r.d.Logger().Info(fmt.Sprintf("Sending atomic batch: Map START + %d iteration STARTs", len(batch)-1))
-	if err := r.d.CheckpointBatch(ctx, batch); err != nil {
+	if err := r.d.CheckpointBatch(batch); err != nil {
 		return err
 	}
 	r.d.Logger().Info("Atomic batch committed, now executing map functions...")
@@ -222,7 +218,7 @@ func (r *MapRunner[TIn, TOut]) checkpointMapStart(ctx context.Context, results [
 
 // checkpointIterationSuccess records a successful iteration result.
 // Returns an error if serialization or the checkpoint call fails.
-func (r *MapRunner[TIn, TOut]) checkpointIterationSuccess(ctx context.Context, iterName string, result TOut, item TIn, i int) error {
+func (r *MapRunner[TIn, TOut]) checkpointIterationSuccess(iterName string, result TOut, item TIn, i int) error {
 	iterSubType := types.OperationSubTypeMapIteration
 	serialized, serErr := utils.SafeSerialize[TOut](r.serdes, result, iterName, r.d.DurableExecutionArn())
 	if serErr != nil {
@@ -237,7 +233,7 @@ func (r *MapRunner[TIn, TOut]) checkpointIterationSuccess(ctx context.Context, i
 		p = &serialized
 	}
 	outerStepID := r.outerStepID
-	return r.d.Checkpoint(ctx, iterName, types.OperationUpdate{
+	return r.d.Checkpoint(iterName, types.OperationUpdate{
 		Id:       iterName,
 		Action:   types.OperationActionSucceed,
 		Type:     types.OperationTypeContext,
@@ -254,7 +250,7 @@ func (r *MapRunner[TIn, TOut]) checkpointIterationSuccess(ctx context.Context, i
 
 // executeIterations runs the mapFn for each pending iteration in parallel.
 // Returns the completion reason and the first fatal (non-termination) error encountered.
-func (r *MapRunner[TIn, TOut]) executeIterations(ctx context.Context, results []TOut, errs []error) (string, error) {
+func (r *MapRunner[TIn, TOut]) executeIterations(results []TOut, errs []error) (string, error) {
 	workCh := r.pendingIterationsChannel()
 
 	concurrency := r.maxConcurrency
@@ -280,13 +276,13 @@ func (r *MapRunner[TIn, TOut]) executeIterations(ctx context.Context, results []
 					}
 					item := r.items[i]
 					iterName := r.iterationName(i)
-					childGoCtx := r.d.NewChildDurableContext(ctx, iterName, iterName, r.d.Mode())
+					childDc := r.d.NewChildDurableContext(r.d.Context(), iterName, iterName, r.d.Mode())
 
-					result, err := r.mapFn(childGoCtx, item, i, r.items)
+					result, err := r.mapFn(childDc.Context(), childDc, item, i, r.items)
 					errs[i] = err
 					if err == nil {
 						results[i] = result
-						if checkpointErr := r.checkpointIterationSuccess(ctx, iterName, result, item, i); checkpointErr != nil {
+						if checkpointErr := r.checkpointIterationSuccess(iterName, result, item, i); checkpointErr != nil {
 							errs[i] = checkpointErr
 							fatalErrCh <- checkpointErr
 						}
@@ -347,7 +343,7 @@ func (r *MapRunner[TIn, TOut]) collectResultsFromInvokeChildren() ([]TOut, []err
 }
 
 // finalize checkpoints the outer Map as SUCCEEDED and returns the BatchResult.
-func (r *MapRunner[TIn, TOut]) finalize(ctx context.Context, results []TOut, errs []error, reason string) (types.BatchResult[TOut], error) {
+func (r *MapRunner[TIn, TOut]) finalize(results []TOut, errs []error, reason string) (types.BatchResult[TOut], error) {
 	subType := types.OperationSubTypeMap
 
 	batchResult := types.BatchResult[TOut]{
@@ -372,7 +368,7 @@ func (r *MapRunner[TIn, TOut]) finalize(ctx context.Context, results []TOut, err
 	if serialized != "" {
 		payloadPtr = &serialized
 	}
-	if err := r.d.Checkpoint(ctx, r.outerStepID, types.OperationUpdate{
+	if err := r.d.Checkpoint(r.outerStepID, types.OperationUpdate{
 		Id:      r.outerStepID,
 		Action:  types.OperationActionSucceed,
 		Type:    types.OperationTypeContext,

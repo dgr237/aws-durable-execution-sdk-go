@@ -1,7 +1,6 @@
 package operations
 
 import (
-	"context"
 	"fmt"
 
 	durableCtx "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
@@ -43,21 +42,17 @@ func newCallbackRunner[TResult any](
 // ---------------------------------------------------------------------------
 
 func CreateCallback[TResult any](
-	ctx context.Context,
+	dc types.DurableContext,
 	name string,
 	opts ...CallbackOption[TResult],
 ) (<-chan types.CallbackResult[TResult], string, error) {
-	d, err := durableCtx.GetDurableContext(ctx)
-	if err != nil {
-		panic("durable: no DurableContext found in ctx — pass the context.Context received by your HandlerFunc, not context.Background()")
-	}
-	r := newCallbackRunner[TResult](d, name, opts)
+	r := newCallbackRunner[TResult](dc, name, opts)
 
-	stored := d.GetStepData(r.stepID)
+	stored := dc.GetStepData(r.stepID)
 
 	subType := types.OperationSubTypeCallback
 	if err := durableCtx.ValidateReplayConsistency(r.stepID, types.OperationTypeCallback, r.namePtr, &subType, stored); err != nil {
-		d.Terminate(types.TerminationResult{
+		dc.Terminate(types.TerminationResult{
 			Reason:  types.TerminationReasonContextValidationError,
 			Error:   err,
 			Message: err.Error(),
@@ -70,7 +65,7 @@ func CreateCallback[TResult any](
 		return r.replaySucceeded(stored), callbackID, nil
 	}
 
-	return r.startFresh(ctx)
+	return r.startFresh()
 }
 
 // ---------------------------------------------------------------------------
@@ -88,10 +83,10 @@ func (r *CallbackRunner[TResult]) replaySucceeded(stored *types.Operation) <-cha
 	return ch
 }
 
-func (r *CallbackRunner[TResult]) startFresh(ctx context.Context) (<-chan types.CallbackResult[TResult], string, error) {
+func (r *CallbackRunner[TResult]) startFresh() (<-chan types.CallbackResult[TResult], string, error) {
 	callbackID := r.generateCallbackID()
 
-	if err := r.d.Checkpoint(ctx, r.stepID, types.OperationUpdate{
+	if err := r.d.Checkpoint(r.stepID, types.OperationUpdate{
 		Id:              r.stepID,
 		Action:          types.OperationActionStart,
 		Type:            types.OperationTypeCallback,

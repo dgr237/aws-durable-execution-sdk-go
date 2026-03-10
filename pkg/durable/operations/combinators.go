@@ -11,12 +11,12 @@ import (
 // If any branch fails, All returns an AggregateError containing all failures.
 // Corresponds to Promise.all semantics.
 func All[TOut any](
-	ctx context.Context,
+	dc types.DurableContext,
 	name string,
-	branches []func(ctx context.Context) (TOut, error),
+	branches []func(ctx context.Context, dc types.DurableContext) (TOut, error),
 	opts ...ParallelOption[TOut],
 ) ([]TOut, error) {
-	batch, err := Parallel(ctx, name, branches, opts...)
+	batch, err := Parallel(dc, name, branches, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -33,21 +33,21 @@ func All[TOut any](
 // AllSettled runs all branches in parallel and returns a BatchResult regardless
 // of individual branch outcomes. Corresponds to Promise.allSettled semantics.
 func AllSettled[TOut any](
-	ctx context.Context,
+	dc types.DurableContext,
 	name string,
-	branches []func(ctx context.Context) (TOut, error),
+	branches []func(ctx context.Context, dc types.DurableContext) (TOut, error),
 	opts ...ParallelOption[TOut],
 ) (types.BatchResult[TOut], error) {
-	return Parallel(ctx, name, branches, opts...)
+	return Parallel(dc, name, branches, opts...)
 }
 
 // Any runs all branches in parallel and returns the first successful result.
 // If all branches fail, Any returns an AggregateError.
 // Corresponds to Promise.any semantics.
 func Any[TOut any](
-	ctx context.Context,
+	dc types.DurableContext,
 	name string,
-	branches []func(ctx context.Context) (TOut, error),
+	branches []func(ctx context.Context, dc types.DurableContext) (TOut, error),
 	opts ...ParallelOption[TOut],
 ) (TOut, error) {
 	var zero TOut
@@ -55,7 +55,7 @@ func Any[TOut any](
 	cfg := &types.BatchCompletionConfig{MinSuccessful: &minSuccessful}
 	opts = append([]ParallelOption[TOut]{WithParallelCompletionConfig[TOut](cfg)}, opts...)
 
-	batch, err := Parallel(ctx, name, branches, opts...)
+	batch, err := Parallel(dc, name, branches, opts...)
 	if err != nil {
 		return zero, err
 	}
@@ -71,9 +71,9 @@ func Any[TOut any](
 // to complete, whether it succeeded or failed.
 // Corresponds to Promise.race semantics.
 func Race[TOut any](
-	ctx context.Context,
+	dc types.DurableContext,
 	name string,
-	branches []func(ctx context.Context) (TOut, error),
+	branches []func(ctx context.Context, dc types.DurableContext) (TOut, error),
 	opts ...ParallelOption[TOut],
 ) (TOut, error) {
 	var zero TOut
@@ -85,7 +85,7 @@ func Race[TOut any](
 	}
 	opts = append([]ParallelOption[TOut]{WithParallelCompletionConfig[TOut](cfg)}, opts...)
 
-	batch, err := Parallel(ctx, name, branches, opts...)
+	batch, err := Parallel(dc, name, branches, opts...)
 	if err != nil {
 		return zero, err
 	}

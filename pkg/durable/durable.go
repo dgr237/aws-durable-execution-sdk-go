@@ -9,8 +9,8 @@
 //	type MyEvent struct { UserID string }
 //	type MyResult struct { Status string }
 //
-//	handler := durable.WithDurableExecution(func(ctx context.Context, event MyEvent) (MyResult, error) {
-//	    data, err := operations.Step(ctx, "fetch-user", func(sc context.Context) (any, error) {
+//	handler := durable.WithDurableExecution(func(ctx context.Context, dc types.DurableContext, event MyEvent) (MyResult, error) {
+//	    data, err := operations.Step(dc, "fetch-user", func(ctx context.Context, sc types.StepContext) (any, error) {
 //	        return fetchUser(event.UserID)
 //	    })
 //	    if err != nil {
@@ -56,10 +56,10 @@ type Config struct {
 //	TEvent  – type of the deserialized Lambda input event
 //	TResult – type of the value returned by the handler
 //
-// The ctx argument is a standard context.Context with a DurableContext embedded.
-// Retrieve it via durablecontext.GetDurableContext(ctx), or pass ctx directly to
-// the operations package functions (Step, Wait, Map, etc.).
-type HandlerFunc[TEvent any, TResult any] func(ctx context.Context, event TEvent) (TResult, error)
+// The ctx argument is the standard Go context.Context (e.g. for cancellation/deadline).
+// The dc argument is the typed DurableContext — pass it directly to operations
+// (Step, Wait, Map, etc.) instead of ctx.
+type HandlerFunc[TEvent any, TResult any] func(ctx context.Context, dc types.DurableContext, event TEvent) (TResult, error)
 
 // LambdaHandler is the AWS Lambda-compatible handler type returned by WithDurableExecution.
 // Register it with the Lambda runtime:
@@ -72,8 +72,8 @@ type LambdaHandler func(ctx context.Context, event types.DurableExecutionInvocat
 //
 // Example:
 //
-//	handler := durable.WithDurableExecution(func(ctx context.Context, event OrderEvent) (OrderResult, error) {
-//	    order, err := operations.Step(ctx, "validate-order", func(sc context.Context) (any, error) {
+//	handler := durable.WithDurableExecution(func(ctx context.Context, dc types.DurableContext, event OrderEvent) (OrderResult, error) {
+//	    order, err := operations.Step(dc, "validate-order", func(ctx context.Context, sc types.StepContext) (any, error) {
 //	        return validateOrder(event)
 //	    })
 //	    if err != nil {
@@ -160,8 +160,10 @@ func runHandler[TEvent any, TResult any](
 	// Ensure the checkpoint manager is told to stop when execution terminates
 	execCtx.TerminationManager.RegisterTerminationCallback(mgr.SetTerminating)
 
-	// Create the root DurableContext embedded in a context.Context
-	ctx := durableCtx.NewRootContext(goCtx, execCtx, lambdaCtx, mgr, mode, logger)
+	// Create the root DurableContext
+	dc := durableCtx.NewRootContext(goCtx, execCtx, lambdaCtx, mgr, mode, logger)
+	// Also embed dc in a context.Context for any internal code that uses GetDurableContext
+	ctx := durableCtx.WithDurableContext(goCtx, dc)
 
 	// Extract the customer's event from the first operation's InputPayload
 	var userEvent TEvent
@@ -176,7 +178,7 @@ func runHandler[TEvent any, TResult any](
 	}
 	handlerCh := make(chan result, 1)
 	go func() {
-		v, err := handler(ctx, userEvent)
+		v, err := handler(ctx, dc, userEvent)
 		handlerCh <- result{value: v, err: err}
 	}()
 

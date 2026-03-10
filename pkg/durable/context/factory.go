@@ -9,7 +9,7 @@ import (
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/utils"
 )
 
-// NewRootContext creates a root-level context.Context carrying a DurableContext for use by the SDK entrypoint.
+// NewRootContext creates a root-level DurableContext for use by the SDK entrypoint.
 func NewRootContext(
 	goCtx context.Context,
 	execCtx *checkpoint.ExecutionContext,
@@ -17,7 +17,7 @@ func NewRootContext(
 	mgr *checkpoint.Manager,
 	mode types.DurableExecutionMode,
 	logger types.Logger,
-) context.Context {
+) types.DurableContext {
 	return NewDurableContext(goCtx, execCtx, lambdaCtx, mgr, mode, logger)
 }
 

@@ -19,7 +19,7 @@ type StepRunner[TOut any] struct {
 	d             types.DurableContext
 	name          string
 	namePtr       *string
-	fn            func(ctx context.Context) (TOut, error)
+	fn            func(ctx context.Context, sc types.StepContext) (TOut, error)
 	serdes        types.Serdes
 	semantics     types.StepSemantics
 	retryStrategy func(err error, attempt int) types.RetryDecision
@@ -30,7 +30,7 @@ type StepRunner[TOut any] struct {
 func newStepRunner[TOut any](
 	d types.DurableContext,
 	name string,
-	fn func(ctx context.Context) (TOut, error),
+	fn func(ctx context.Context, sc types.StepContext) (TOut, error),
 	opts []StepOption[TOut],
 ) *StepRunner[TOut] {
 	r := &StepRunner[TOut]{
@@ -54,16 +54,12 @@ func newStepRunner[TOut any](
 // ---------------------------------------------------------------------------
 
 func Step[TOut any](
-	ctx context.Context,
+	dc types.DurableContext,
 	name string,
-	fn func(ctx context.Context) (TOut, error),
+	fn func(ctx context.Context, sc types.StepContext) (TOut, error),
 	opts ...StepOption[TOut],
 ) (TOut, error) {
-	d, err := durableCtx.GetDurableContext(ctx)
-	if err != nil {
-		panic("durable: no DurableContext found in ctx — pass the context.Context received by your HandlerFunc, not context.Background()")
-	}
-	r := newStepRunner[TOut](d, name, fn, opts)
+	r := newStepRunner[TOut](dc, name, fn, opts)
 
 	stored := r.d.GetStepData(r.stepID)
 
@@ -83,7 +79,7 @@ func Step[TOut any](
 	case stored != nil && stored.Status == types.OperationStatusFailed:
 		return r.replayFailed(stored)
 	default:
-		return r.execute(ctx)
+		return r.execute()
 	}
 }
 
@@ -127,22 +123,22 @@ func (r *StepRunner[TOut]) replayFailed(stored *types.Operation) (TOut, error) {
 	return zero, durableErrors.NewStepError(r.stepID, r.namePtr, cause)
 }
 
-func (r *StepRunner[TOut]) execute(ctx context.Context) (TOut, error) {
-	// Build a step context.Context from the parent durable context
-	stepCtxGo := durableCtx.NewStepContextFrom(ctx)
+func (r *StepRunner[TOut]) execute() (TOut, error) {
+	sc := durableCtx.NewStepContext(r.d)
+	ctx := r.d.Context()
 	for attempt := 1; ; attempt++ {
-		if err := r.maybeCheckpointStart(ctx); err != nil {
+		if err := r.maybeCheckpointStart(); err != nil {
 			var zero TOut
 			return zero, err
 		}
 
-		result, stepErr := r.fn(stepCtxGo)
+		result, stepErr := r.fn(ctx, sc)
 
 		if stepErr == nil {
-			return r.handleSuccess(ctx, result)
+			return r.handleSuccess(result)
 		}
 
-		if shouldStop, out, err := r.handleFailure(ctx, stepErr, attempt); shouldStop {
+		if shouldStop, out, err := r.handleFailure(stepErr, attempt); shouldStop {
 			return out, err
 		}
 	}
@@ -152,11 +148,11 @@ func (r *StepRunner[TOut]) execute(ctx context.Context) (TOut, error) {
 // Retry loop helpers
 // ---------------------------------------------------------------------------
 
-func (r *StepRunner[TOut]) maybeCheckpointStart(ctx context.Context) error {
+func (r *StepRunner[TOut]) maybeCheckpointStart() error {
 	if r.semantics != types.StepSemanticsAtMostOncePerRetry {
 		return nil
 	}
-	return r.d.Checkpoint(ctx, r.stepID, types.OperationUpdate{
+	return r.d.Checkpoint(r.stepID, types.OperationUpdate{
 		Id:      r.stepID,
 		Action:  types.OperationActionStart,
 		Type:    types.OperationTypeStep,
@@ -165,7 +161,7 @@ func (r *StepRunner[TOut]) maybeCheckpointStart(ctx context.Context) error {
 	})
 }
 
-func (r *StepRunner[TOut]) handleSuccess(ctx context.Context, result TOut) (TOut, error) {
+func (r *StepRunner[TOut]) handleSuccess(result TOut) (TOut, error) {
 	var zero TOut
 
 	serialized, serErr := utils.SafeSerialize(r.serdes, result, r.stepID, r.d.DurableExecutionArn())
@@ -182,7 +178,7 @@ func (r *StepRunner[TOut]) handleSuccess(ctx context.Context, result TOut) (TOut
 		payloadPtr = &serialized
 	}
 
-	if err := r.d.Checkpoint(ctx, r.stepID, types.OperationUpdate{
+	if err := r.d.Checkpoint(r.stepID, types.OperationUpdate{
 		Id:      r.stepID,
 		Action:  types.OperationActionSucceed,
 		Type:    types.OperationTypeStep,
@@ -197,7 +193,7 @@ func (r *StepRunner[TOut]) handleSuccess(ctx context.Context, result TOut) (TOut
 	return result, nil
 }
 
-func (r *StepRunner[TOut]) handleFailure(ctx context.Context, stepErr error, attempt int) (stop bool, _ TOut, _ error) {
+func (r *StepRunner[TOut]) handleFailure(stepErr error, attempt int) (stop bool, _ TOut, _ error) {
 	var zero TOut
 
 	if durableErrors.IsUnrecoverableError(stepErr) {
@@ -209,7 +205,7 @@ func (r *StepRunner[TOut]) handleFailure(ctx context.Context, stepErr error, att
 		if decision.ShouldRetry {
 			if decision.Delay != nil && decision.Delay.ToSeconds() > 0 {
 				delaySeconds := int32(decision.Delay.ToSeconds())
-				if cpErr := r.d.Checkpoint(ctx, r.stepID, types.OperationUpdate{
+				if cpErr := r.d.Checkpoint(r.stepID, types.OperationUpdate{
 					Id:      r.stepID,
 					Action:  types.OperationActionRetry,
 					Type:    types.OperationTypeStep,
@@ -239,7 +235,7 @@ func (r *StepRunner[TOut]) handleFailure(ctx context.Context, stepErr error, att
 		}
 	}
 
-	if cpErr := r.d.Checkpoint(ctx, r.stepID, types.OperationUpdate{
+	if cpErr := r.d.Checkpoint(r.stepID, types.OperationUpdate{
 		Id:      r.stepID,
 		Action:  types.OperationActionFail,
 		Type:    types.OperationTypeStep,
