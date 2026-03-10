@@ -35,7 +35,7 @@ go get github.com/aws/durable-execution-sdk-go
 package main
 
 import (
-    "fmt"
+    "context"
 
     "github.com/aws/aws-lambda-go/lambda"
     durable "github.com/aws/durable-execution-sdk-go/pkg/durable"
@@ -45,8 +45,8 @@ import (
 )
 
 type OrderEvent struct {
-    UserID  string
-    Amount  float64
+    UserID string
+    Amount float64
 }
 
 type OrderResult struct {
@@ -54,39 +54,35 @@ type OrderResult struct {
     Status  string
 }
 
-var handler = durable.WithDurableExecution(func(event OrderEvent, ctx types.DurableContext) (OrderResult, error) {
+var handler = durable.WithDurableExecution(func(ctx context.Context, event OrderEvent) (OrderResult, error) {
     // Step 1: Validate order (retried automatically on failure)
-    validatedRaw, err := operations.Step(ctx, "validate-order", func(sc types.StepContext) (any, error) {
+    validated, err := operations.Step(ctx, "validate-order", func(ctx context.Context) (string, error) {
         return validateOrder(event)
-    }, &types.StepConfig{
-        RetryStrategy: utils.Presets.ExponentialBackoff(),
-    })
+    }, operations.WithStepRetryStrategy[string](utils.Presets.ExponentialBackoff()))
     if err != nil {
         return OrderResult{}, err
     }
 
     // Step 2: Wait for payment approval from an external system
-    _, err = operations.WaitForCallback[any](ctx, "payment-approval", func(sc types.StepContext, callbackID string) error {
-        return sendPaymentRequest(event.UserID, event.Amount, callbackID)
-    }, &types.WaitForCallbackConfig{
-        Timeout: &types.Duration{Hours: 1},
-    })
+    _, err = operations.WaitForCallback[any](ctx, "payment-approval",
+        func(ctx context.Context, callbackID string) error {
+            return sendPaymentRequest(event.UserID, event.Amount, callbackID)
+        },
+        operations.WithWaitForCallbackTimeout[any](types.Duration{Hours: 1}),
+    )
     if err != nil {
         return OrderResult{}, err
     }
 
     // Step 3: Confirm the order
-    orderIDRaw, err := operations.Step(ctx, "confirm-order", func(sc types.StepContext) (any, error) {
-        return confirmOrder(validatedRaw)
-    }, nil)
+    orderID, err := operations.Step(ctx, "confirm-order", func(ctx context.Context) (string, error) {
+        return confirmOrder(validated)
+    })
     if err != nil {
         return OrderResult{}, err
     }
 
-    return OrderResult{
-        OrderID: orderIDRaw.(string),
-        Status:  "confirmed",
-    }, nil
+    return OrderResult{OrderID: orderID, Status: "confirmed"}, nil
 }, nil)
 
 func main() {
@@ -105,126 +101,165 @@ When a durable function is first invoked, it runs normally and persists the resu
 - For each operation that already completed, the SDK **skips execution** and returns the stored result.
 - When it reaches the first operation that hasn't completed yet, it **executes normally**.
 
-> **Important**: Code *outside* a step runs on every replay. Non-deterministic code (timestamps, UUIDs, random numbers, API calls) **must** be placed inside a `ctx.Step(...)` call.
+> **Important**: Code *outside* an `operations.Step(...)` call runs on every replay. Non-deterministic code (timestamps, UUIDs, random numbers, API calls) **must** be placed inside a step. Use `durable.CurrentTime(ctx)` instead of `time.Now()` for replay-safe current time.
 
 ### Step IDs
 
-Each call to `ctx.Step(...)`, `ctx.Wait(...)`, etc. is assigned a deterministic hierarchical ID based on its position in the code (e.g., `"1"`, `"2"`, `"1-1"` for a child context). This ensures the replay order is stable as long as the code structure is unchanged.
+Each call to `operations.Step(...)`, `operations.Wait(...)`, etc. is assigned a deterministic hierarchical ID based on its position in the code (e.g., `"1"`, `"2"`, `"1-1"` for a child context). This ensures the replay order is stable as long as the code structure is unchanged.
+
+### Handler Signature
+
+The handler passed to `WithDurableExecution` must have the signature:
+
+```go
+func(ctx context.Context, event TEvent) (TResult, error)
+```
+
+The `ctx` carries an embedded `DurableContext`. Pass it directly to all `operations.*` functions — do not replace it with `context.Background()`.
 
 ---
 
 ## API Reference
 
-### `ctx.Step(name, fn, config)`
+All durable operations are package-level functions in the `operations` package that accept a `context.Context` as their first argument.
+
+### `operations.Step`
 
 Executes a function as a durable step. The result is checkpointed after success.
 
 ```go
-result, err := ctx.Step("fetch-user", func(sc types.StepContext) (any, error) {
+result, err := operations.Step(ctx, "fetch-user", func(ctx context.Context) (User, error) {
     return fetchUserFromDB(userID)
-}, &types.StepConfig{
-    RetryStrategy: retry.Presets.ExponentialBackoff(),
-    Semantics:     types.StepSemanticsAtLeastOncePerRetry,
-})
+}, operations.WithStepRetryStrategy[User](utils.Presets.ExponentialBackoff()),
+   operations.WithStepSemantics[User](types.StepSemanticsAtLeastOncePerRetry))
 ```
 
-**Config options:**
+**Functional options:**
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `RetryStrategy` | `func(error, int) RetryDecision` | default 3-attempt backoff | Called on failure to determine retry |
-| `Semantics` | `StepSemantics` | `AtLeastOncePerRetry` | Execution guarantee per retry attempt |
-| `Serdes` | `Serdes` | JSON | Custom serialization |
+| Option | Description |
+|--------|-------------|
+| `WithStepRetryStrategy[TOut](fn)` | Called on failure to determine retry; `fn` has signature `func(err error, attempt int) types.RetryDecision` |
+| `WithStepSemantics[TOut](sem)` | `StepSemanticsAtLeastOncePerRetry` (default) or `StepSemanticsAtMostOncePerRetry` |
+| `WithStepSerdes[TOut](s)` | Custom serialization (default: JSON) |
 
 **`StepSemantics`:**
 
 - `AtLeastOncePerRetry` (default): The step executes at least once per retry attempt. Safe for idempotent operations.
 - `AtMostOncePerRetry`: A checkpoint is created *before* execution. Use for non-idempotent operations; combine with `NoRetry` for strict at-most-once.
 
-### `ctx.Wait(name, duration)`
+### `operations.Wait`
 
 Pauses execution for the specified duration. The Lambda invocation terminates and is resumed by the service after the timer fires.
 
 ```go
-err := ctx.Wait("cooling-off-period", types.Duration{Days: 7})
+err := operations.Wait(ctx, "cooling-off-period", types.Duration{Days: 7})
 ```
 
-### `ctx.RunInChildContext(name, fn, config)`
+### `operations.RunInChildContext`
 
 Runs a function in an isolated child context with its own step counter. Use this to group related operations or enable concurrency.
 
 ```go
-result, err := ctx.RunInChildContext("process-batch", func(child types.DurableContext) (any, error) {
-    step1, _ := child.Step("validate", func(sc types.StepContext) (any, error) { ... }, nil)
-    step2, _ := child.Step("transform", func(sc types.StepContext) (any, error) { ... }, nil)
+result, err := operations.RunInChildContext(ctx, "process-batch", func(ctx context.Context) (BatchResult, error) {
+    step1, _ := operations.Step(ctx, "validate", func(ctx context.Context) (any, error) { ... })
+    step2, _ := operations.Step(ctx, "transform", func(ctx context.Context) (any, error) { ... })
     return step2, nil
-}, nil)
+})
 ```
 
-### `ctx.Invoke(name, funcID, input, config)`
+**Functional options:** `WithChildSerdes[T](s)`
+
+### `operations.Invoke`
 
 Invokes another Lambda function (durable or non-durable) and waits for its result.
 
 ```go
-result, err := ctx.Invoke(
+result, err := operations.Invoke[map[string]any, PaymentResult](
+    ctx,
     "process-payment",
     "arn:aws:lambda:us-east-1:123456789012:function:payment-processor:1",
     map[string]any{"amount": 100},
-    nil,
 )
 ```
 
-### `ctx.WaitForCallback(name, submitter, config)`
+**Functional options:** `WithInvokeSerdes[TIn, TOut](s)`
+
+### `operations.WaitForCallback`
 
 Runs `submitter` to hand off work to an external system, then suspends until the external system calls the `SendDurableExecutionCallbackSuccess` or `SendDurableExecutionCallbackFailure` APIs.
 
 ```go
-result, err := ctx.WaitForCallback("human-approval", func(sc types.StepContext, callbackID string) error {
-    return sendApprovalEmail(approverEmail, callbackID)
-}, &types.WaitForCallbackConfig{
-    Timeout: &types.Duration{Hours: 24},
-})
+result, err := operations.WaitForCallback[ApprovalResult](ctx, "human-approval",
+    func(ctx context.Context, callbackID string) error {
+        return sendApprovalEmail(approverEmail, callbackID)
+    },
+    operations.WithWaitForCallbackTimeout[ApprovalResult](types.Duration{Hours: 24}),
+)
 ```
 
-### `ctx.CreateCallback(name, config)`
+**Functional options:**
 
-Low-level callback creation. Returns a channel and the callback ID separately.
+| Option | Description |
+|--------|-------------|
+| `WithWaitForCallbackTimeout[T](d)` | Maximum duration to wait before failing |
+| `WithWaitForCallbackSerdes[T](s)` | Custom serialization |
+
+### `operations.CreateCallback`
+
+Low-level callback creation. Returns a result channel, the callback ID, and an error.
 
 ```go
-ch, callbackID, err := ctx.CreateCallback("my-callback", nil)
+ch, callbackID, err := operations.CreateCallback[MyResult](ctx, "my-callback")
+if err != nil {
+    return Result{}, err
+}
 // Send callbackID to external system
-result := <-ch
+callbackResult := <-ch
+if callbackResult.Err != nil {
+    return Result{}, callbackResult.Err
+}
+result := callbackResult.Value
 ```
 
-### `ctx.WaitForCondition(name, checkFn, config)`
+**Functional options:** `WithCallbackTimeout[TResult](d)`
 
-Polls `checkFn` until a condition is met, controlled by `WaitStrategy`.
+### `operations.WaitForCondition`
+
+Polls `checkFn` until the wait strategy says to stop. The `initialState` argument is required.
 
 ```go
-finalState, err := ctx.WaitForCondition("wait-for-job", func(state any, sc types.StepContext) (any, error) {
-    return checkJobStatus(state.(JobState).JobID)
-}, types.WaitForConditionConfig{
-    InitialState: JobState{JobID: "job-123", Status: "pending"},
-    WaitStrategy: func(state any, attempt int) types.WaitStrategyResult {
-        if state.(JobState).Status == "completed" {
+finalState, err := operations.WaitForCondition(ctx, "wait-for-job",
+    func(state JobState, ctx context.Context) (JobState, error) {
+        return checkJobStatus(state.JobID)
+    },
+    JobState{JobID: "job-123", Status: "pending"},
+    operations.WithConditionWaitStrategy(func(state JobState, attempt int) types.WaitStrategyResult {
+        if state.Status == "completed" {
             return types.WaitStrategyResult{ShouldContinue: false}
         }
         delay := types.Duration{Seconds: min(attempt*5, 60)}
         return types.WaitStrategyResult{ShouldContinue: true, Delay: &delay}
-    },
-})
+    }),
+)
 ```
 
-### `ctx.Map(name, items, mapFn, config)`
+**Functional options:**
 
-Processes an array of items with durable operations and optional concurrency control.
+| Option | Description |
+|--------|-------------|
+| `WithConditionWaitStrategy[TState](fn)` | Controls polling delay and termination |
+| `WithConditionSerdes[TState](s)` | Custom serialization for state |
+
+### `operations.Map`
+
+Processes a typed slice of items with durable operations and optional concurrency control.
 
 ```go
-results, err := ctx.Map("process-users", toAnySlice(users),
-    func(ctx types.DurableContext, item any, index int, items []any) (any, error) {
-        return processUser(item.(User))
+results, err := operations.Map(ctx, "process-users", users,
+    func(ctx context.Context, user User, index int, items []User) (ProcessedUser, error) {
+        return processUser(user)
     },
-    &types.MapConfig{MaxConcurrency: 5},
+    operations.WithMapMaxConcurrency[User, ProcessedUser](5),
 )
 for _, r := range results.Items {
     if r.Err == nil {
@@ -233,71 +268,107 @@ for _, r := range results.Items {
 }
 ```
 
-### `ctx.Parallel(name, branches, config)`
+**Functional options:**
+
+| Option | Description |
+|--------|-------------|
+| `WithMapMaxConcurrency[TIn, TOut](n)` | Maximum concurrent iterations |
+| `WithMapCompletionConfig[TIn, TOut](cfg)` | Early-exit policy (`MinSuccessful`, `ToleratedFailureCount`, `ToleratedFailurePercentage`) |
+| `WithMapItemNamer[TIn, TOut](fn)` | Custom name for each iteration |
+| `WithMapSerdes[TIn, TOut](s)` | Custom serialization |
+
+### `operations.Parallel`
 
 Executes multiple branch functions concurrently with optional concurrency control.
 
 ```go
-results, err := ctx.Parallel("parallel-tasks", []func(types.DurableContext) (any, error){
-    func(ctx types.DurableContext) (any, error) {
-        return ctx.Step("task-1", func(sc types.StepContext) (any, error) { return doTask1() }, nil)
+results, err := operations.Parallel(ctx, "parallel-tasks", []func(context.Context) (any, error){
+    func(ctx context.Context) (any, error) {
+        return operations.Step(ctx, "task-1", func(ctx context.Context) (any, error) { return doTask1() })
     },
-    func(ctx types.DurableContext) (any, error) {
-        return ctx.Step("task-2", func(sc types.StepContext) (any, error) { return doTask2() }, nil)
+    func(ctx context.Context) (any, error) {
+        return operations.Step(ctx, "task-2", func(ctx context.Context) (any, error) { return doTask2() })
     },
-}, &types.ParallelConfig{MaxConcurrency: 2})
+}, operations.WithParallelMaxConcurrency[any](2))
 ```
+
+**Functional options:**
+
+| Option | Description |
+|--------|-------------|
+| `WithParallelMaxConcurrency[TOut](n)` | Maximum concurrent branches |
+| `WithParallelCompletionConfig[TOut](cfg)` | Early-exit policy |
+| `WithParallelSerdes[TOut](s)` | Custom serialization |
 
 ### Promise Combinators
 
-For coordinating already-running channels:
+Higher-level wrappers over `Parallel` for common coordination patterns:
 
 ```go
-// Wait for all to succeed
-results, err := ctx.PromiseAll("all", []<-chan types.StepResult{ch1, ch2, ch3})
+// Wait for all to succeed — returns []TOut or AggregateError
+results, err := operations.All(ctx, "all", branches)
 
-// Wait for all to settle (success or failure)
-settled, _ := ctx.PromiseAllSettled("settle", channels)
+// Wait for all to settle — returns BatchResult[TOut] regardless of failures
+settled, _ := operations.AllSettled(ctx, "settle", branches)
 
-// First to succeed wins
-first, err := ctx.PromiseAny("any", channels)
+// First to succeed wins — returns TOut or AggregateError if all fail
+first, err := operations.Any(ctx, "any", branches)
 
-// First to settle wins
-winner, err := ctx.PromiseRace("race", channels)
+// First to settle wins — returns TOut of first completed branch
+winner, err := operations.Race(ctx, "race", branches)
 ```
 
-> **Prefer `ctx.Map()` and `ctx.Parallel()`** for durable concurrent operations. Promise combinators are for lightweight, non-durable coordination.
+All combinators accept the same `...ParallelOption[TOut]` variadic options as `Parallel`.
 
 ---
 
 ## Retry Strategies
 
+Import `"github.com/aws/durable-execution-sdk-go/pkg/durable/utils"` for retry helpers.
+
 ### Built-in Presets
 
 ```go
-import "github.com/aws/durable-execution-sdk-go/utils/retry"
-
-// Exponential backoff with full jitter (default for most use cases)
-retry.Presets.ExponentialBackoff()
+// Exponential backoff with full jitter (maxAttempts=3, initialDelay=5s, maxDelay=5m)
+utils.Presets.ExponentialBackoff()
 
 // No retries
-retry.Presets.NoRetry()
+utils.Presets.NoRetry()
 
 // Fixed delay
-retry.Presets.FixedDelay(types.Duration{Seconds: 10}, 5)
+utils.Presets.FixedDelay(types.Duration{Seconds: 10}, 5)
 ```
 
 ### Custom Strategy
 
 ```go
-customRetry := retry.CreateRetryStrategy(retry.RetryStrategyConfig{
+customRetry := utils.CreateRetryStrategy(utils.RetryStrategyConfig{
     MaxAttempts:  5,
     InitialDelay: &types.Duration{Seconds: 2},
     MaxDelay:     &types.Duration{Minutes: 2},
     BackoffRate:  1.5,
     Jitter:       types.JitterStrategyHalf,
 })
+
+// Use with a step:
+result, err := operations.Step(ctx, "my-step", fn,
+    operations.WithStepRetryStrategy[MyType](customRetry))
 ```
+
+---
+
+## Determinism Helpers
+
+Code between steps runs on every replay and must be deterministic. Use the helpers in the `durable` package:
+
+```go
+import durable "github.com/aws/durable-execution-sdk-go/pkg/durable"
+
+// Use instead of time.Now() — returns the execution's start time from checkpointed state
+startedAt, err := durable.CurrentTime(ctx)
+```
+
+Forbidden patterns outside steps: `time.Now()`, `rand.*`, `uuid.New()`, unordered map iteration, direct API/DB calls. See `determinism.go` for the full rules.
 
 ---
 
@@ -320,30 +391,48 @@ func (s S3Serdes) Deserialize(pointer, entityID, arn string) (any, error) {
 }
 ```
 
+Pass to any operation via its `WithXxxSerdes` option (e.g., `WithStepSerdes[TOut](mySerdes)`).
+
+---
+
+## Checkpoint Strategy
+
+Control how operation updates are batched into API calls via `Config.CheckpointStrategy`:
+
+```go
+handler := durable.WithDurableExecution(myHandler, &durable.Config{
+    CheckpointStrategy: types.CheckpointStrategyEager,      // default — one API call per update
+    // CheckpointStrategy: types.CheckpointStrategyBatched,  // batch updates together
+    // CheckpointStrategy: types.CheckpointStrategyOptimistic, // fire-and-forget (fastest, less durable)
+})
+```
+
 ---
 
 ## Testing
 
-Inject a mock client via `Config`:
+Inject a mock client via `Config`. The `checkpoint.Client` interface requires two methods:
 
 ```go
-type mockClient struct {
-    checkpoints []types.CheckpointDurableExecutionRequest
-}
+import (
+    "context"
+    "github.com/aws/durable-execution-sdk-go/pkg/durable/checkpoint"
+    "github.com/aws/durable-execution-sdk-go/pkg/durable/types"
+)
 
-func (m *mockClient) Checkpoint(r types.CheckpointDurableExecutionRequest) (*types.CheckpointDurableExecutionResponse, error) {
-    m.checkpoints = append(m.checkpoints, r)
+type mockClient struct{}
+
+func (m *mockClient) Checkpoint(ctx context.Context, r types.CheckpointDurableExecutionRequest) (*types.CheckpointDurableExecutionResponse, error) {
     token := "next-token"
     return &types.CheckpointDurableExecutionResponse{NextCheckpointToken: &token}, nil
 }
 
-func (m *mockClient) CheckpointToken() string {
-    return "test-token"
+func (m *mockClient) GetExecutionState(ctx context.Context, r types.GetDurableExecutionStateRequest) (*types.GetDurableExecutionStateResponse, error) {
+    return &types.GetDurableExecutionStateResponse{}, nil
 }
 
 // In your test:
-mock := &mockClient{}
-handler := durable.WithDurableExecution(myHandler, &durable.Config{Client: mock})
+handler := durable.WithDurableExecution(myHandler, &durable.Config{Client: &mockClient{}})
 ```
 
 ---
@@ -352,12 +441,13 @@ handler := durable.WithDurableExecution(myHandler, &durable.Config{Client: mock}
 
 | Feature | TypeScript | Go |
 |---------|-----------|-----|
-| Operations API | Methods on context (e.g., `ctx.step()`) | Functions in `operations` package (e.g., `operations.Step()`) |
+| Operations API | Methods on context (e.g., `ctx.step()`) | Functions in `operations` package (e.g., `operations.Step(ctx, ...)`) |
+| Handler signature | `(event, ctx)` | `(ctx context.Context, event TEvent)` |
+| Options | Config structs | Functional options (e.g., `WithStepRetryStrategy`) |
 | Generic types | `DurableContext<TLogger>` | `types.DurableContext` interface |
 | Async model | Promises / async-await | Goroutines + channels |
 | Replay suspension | JS event loop | `select {}` + goroutine |
-| Step results | Typed generics | `any` (use type assertions) |
-| Optional names | Overloaded signatures | Empty string `""` = unnamed |
+| Step results | Typed generics | Typed generics via Go type parameters |
 | Logger | Structured custom logger | `types.Logger` interface |
 
 ---
@@ -366,8 +456,11 @@ handler := durable.WithDurableExecution(myHandler, &durable.Config{Client: mock}
 
 ```
 pkg/durable/
-├── durable.go                     # WithDurableExecution entry point
-├── types/types.go                 # All public types and interfaces
+├── durable.go                     # WithDurableExecution entry point, Config
+├── determinism.go                 # CurrentTime helper and determinism documentation
+├── types/
+│   ├── types.go                   # All public types and interfaces
+│   └── limits.go                  # Execution limit constants (§14.1)
 ├── operations/                    # Durable operations API
 │   ├── step.go                    # Step operation
 │   ├── wait.go                    # Wait operation
@@ -377,10 +470,13 @@ pkg/durable/
 │   ├── invoke.go                  # Invoke operation
 │   ├── run_in_child_context.go    # RunInChildContext operation
 │   ├── map.go                     # Map batch operation
-│   └── parallel.go                # Parallel batch operation
+│   ├── parallel.go                # Parallel batch operation
+│   ├── combinators.go             # All, AllSettled, Any, Race
+│   ├── completion.go              # BatchCompletionConfig evaluation
+│   └── options.go                 # Functional option types for all operations
 ├── context/
 │   ├── durable_context.go         # DurableContext implementation
-│   ├── execution_context.go       # Builds ExecutionContext from invocation input
+│   ├── execution_context.go       # ExecutionContext + Client interface
 │   ├── step_id.go                 # Hierarchical step ID generation and replay validation
 │   └── factory.go                 # NewRootContext constructor
 ├── checkpoint/
@@ -389,11 +485,11 @@ pkg/durable/
 ├── client/
 │   └── client.go                  # AWS Lambda client adapter
 ├── errors/
-│   └── errors.go                  # SDK error types
+│   └── errors.go                  # SDK error types and runtime error classification
 └── utils/
     ├── serdes.go                   # Default JSON Serdes + helpers
-    ├── logger.go                   # DefaultLogger, ModeAwareLogger, NopLogger
-    └── retry.go                    # RetryStrategyConfig + presets
+    ├── logger.go                   # DefaultLogger, NopLogger
+    └── retry.go                    # RetryStrategyConfig, CreateRetryStrategy, Presets
 ```
 
 ---
@@ -429,20 +525,26 @@ Your Lambda function must be configured with:
 
 ### Environment Configuration
 
-The SDK automatically detects Lambda environment. No additional configuration needed for most cases.
+The SDK automatically detects the Lambda environment. No additional configuration is needed for most cases.
 
 **Custom logger:**
 ```go
-ctx.ConfigureLogger(types.LoggerConfig{
+import durablecontext "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
+
+dc, err := durablecontext.GetDurableContext(ctx)
+if err != nil {
+    return Result{}, err
+}
+dc.ConfigureLogger(types.LoggerConfig{
     CustomLogger: myLogger,
     ModeAware:    aws.Bool(true), // Suppress logs during replay
 })
 ```
 
-**Custom client (for testing):**
+**Custom client (for testing or staging):**
 ```go
 handler := durable.WithDurableExecution(myHandler, &durable.Config{
-    Client: mockClient,
+    Client: myCustomClient,
 })
 ```
 
@@ -468,7 +570,6 @@ CMD ["main"]
 
 See the [`examples/`](./examples/) directory for complete working examples:
 
-- **[order-processing](./examples/order_processing/)**: End-to-end order workflow with steps, callbacks, and parallel processing
 - **[lambda-invoke-map](./examples/lamba-invoke-map/)**: Cross-Lambda orchestration with Map for fan-out processing
 
 ---
@@ -501,4 +602,3 @@ This SDK is distributed under the Apache License, Version 2.0. See [LICENSE](./L
 ## Support
 
 For issues, questions, or contributions, please open an issue on GitHub.
-
