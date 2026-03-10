@@ -1,7 +1,6 @@
 package operations
 
 import (
-	"context"
 	"fmt"
 
 	durableCtx "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
@@ -18,7 +17,7 @@ type WaitForCallbackRunner[T any] struct {
 	d         types.DurableContext
 	name      string
 	namePtr   *string
-	submitter func(ctx context.Context, sc types.StepContext, callbackID string) error
+	submitter func(sc types.StepContext, callbackID string) error
 	serdes    types.Serdes
 	timeout   *types.Duration
 	subType   types.OperationSubType
@@ -28,7 +27,7 @@ type WaitForCallbackRunner[T any] struct {
 func newWaitForCallbackRunner[T any](
 	d types.DurableContext,
 	name string,
-	submitter func(ctx context.Context, sc types.StepContext, callbackID string) error,
+	submitter func(sc types.StepContext, callbackID string) error,
 	opts []WaitForCallbackOption[T],
 ) *WaitForCallbackRunner[T] {
 	r := &WaitForCallbackRunner[T]{
@@ -53,7 +52,7 @@ func newWaitForCallbackRunner[T any](
 func WaitForCallback[T any](
 	dc types.DurableContext,
 	name string,
-	submitter func(ctx context.Context, sc types.StepContext, callbackID string) error,
+	submitter func(sc types.StepContext, callbackID string) error,
 	opts ...WaitForCallbackOption[T],
 ) (T, error) {
 	r := newWaitForCallbackRunner[T](dc, name, submitter, opts)
@@ -106,7 +105,7 @@ func (r *WaitForCallbackRunner[T]) startFresh() (T, error) {
 
 	// Build a StepContext for the submitter
 	sc := durableCtx.NewStepContext(r.d)
-	if err := r.submitter(r.d.Context(), sc, callbackID); err != nil {
+	if err := r.submitter(sc, callbackID); err != nil {
 		return zero, err
 	}
 

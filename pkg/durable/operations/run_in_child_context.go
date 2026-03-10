@@ -1,7 +1,6 @@
 package operations
 
 import (
-	"context"
 	"fmt"
 
 	durableCtx "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
@@ -18,7 +17,7 @@ type ChildContextRunner[T any] struct {
 	d            types.DurableContext
 	name         string
 	namePtr      *string
-	fn           func(ctx context.Context, dc types.DurableContext) (T, error)
+	fn           func(dc types.DurableContext) (T, error)
 	serdes       types.Serdes
 	childSubType *types.OperationSubType
 	stepID       string
@@ -27,7 +26,7 @@ type ChildContextRunner[T any] struct {
 func newChildContextRunner[T any](
 	d types.DurableContext,
 	name string,
-	fn func(ctx context.Context, dc types.DurableContext) (T, error),
+	fn func(dc types.DurableContext) (T, error),
 	opts []ChildContextOption[T],
 ) *ChildContextRunner[T] {
 	defaultSubType := types.OperationSubTypeRunInChildContext
@@ -53,7 +52,7 @@ func newChildContextRunner[T any](
 func RunInChildContext[T any](
 	dc types.DurableContext,
 	name string,
-	fn func(ctx context.Context, dc types.DurableContext) (T, error),
+	fn func(dc types.DurableContext) (T, error),
 	opts ...ChildContextOption[T],
 ) (T, error) {
 	r := newChildContextRunner[T](dc, name, fn, opts)
@@ -113,7 +112,7 @@ func (r *ChildContextRunner[T]) replayFailed(stored *types.Operation) (T, error)
 
 func (r *ChildContextRunner[T]) startFresh() (T, error) {
 	childDc := r.d.NewChildDurableContext(r.d.Context(), r.stepID, r.stepID, r.d.Mode())
-	result, err := r.fn(childDc.Context(), childDc)
+	result, err := r.fn(childDc)
 
 	if err != nil {
 		return r.handleExecutionError(err)

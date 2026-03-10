@@ -11,7 +11,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -53,7 +52,7 @@ func main() {
 	lambda.Start(durable.WithDurableExecution[Event, MainResult](mainHandler, nil))
 }
 
-func mainHandler(ctx context.Context, dc types.DurableContext, event Event) (MainResult, error) {
+func mainHandler(event Event, dc types.DurableContext) (MainResult, error) {
 	startTime := getStartTime(dc)
 
 	result, err := operations.Step(dc, "initialize-tasks", initializeFn)
@@ -79,14 +78,14 @@ func mainHandler(ctx context.Context, dc types.DurableContext, event Event) (Mai
 }
 
 func getStartTime(dc types.DurableContext) time.Time {
-	startTime, _ := operations.Step(dc, "start-time", func(ctx context.Context, sc types.StepContext) (time.Time, error) {
+	startTime, _ := operations.Step(dc, "start-time", func(sc types.StepContext) (time.Time, error) {
 		sc.Logger().Info("Starting main execution")
 		return time.Now(), nil
 	})
 	return startTime
 }
 
-func initializeFn(ctx context.Context, sc types.StepContext) ([]TaskInput, error) {
+func initializeFn(sc types.StepContext) ([]TaskInput, error) {
 	sc.Logger().Info("Starting main execution with Map operation for 3 tasks")
 	taskConfigs := make([]TaskInput, 3)
 	for i := 0; i < 3; i++ {
@@ -100,7 +99,7 @@ func initializeFn(ctx context.Context, sc types.StepContext) ([]TaskInput, error
 	return taskConfigs, nil
 }
 
-func runTaskFn(ctx context.Context, dc types.DurableContext, taskInput TaskInput, index int, items []TaskInput) (TaskResult, error) {
+func runTaskFn(dc types.DurableContext, taskInput TaskInput, index int, items []TaskInput) (TaskResult, error) {
 	dc.Logger().Info(fmt.Sprintf("Processing task %d with %d ms wait", taskInput.TaskNumber, taskInput.WaitTimeMs))
 
 	taskLambdaArn := os.Getenv("TASK_LAMBDA_NAME")
@@ -127,8 +126,8 @@ func runTaskFn(ctx context.Context, dc types.DurableContext, taskInput TaskInput
 	return taskResult, nil
 }
 
-func aggregateResultsFn(startTime time.Time, mapResult types.BatchResult[TaskResult]) func(ctx context.Context, sc types.StepContext) (MainResult, error) {
-	return func(ctx context.Context, sc types.StepContext) (MainResult, error) {
+func aggregateResultsFn(startTime time.Time, mapResult types.BatchResult[TaskResult]) func(sc types.StepContext) (MainResult, error) {
+	return func(sc types.StepContext) (MainResult, error) {
 		taskResults := make([]TaskResult, 0)
 		totalWaitTimeMs := 0
 		errs := make([]error, 0)

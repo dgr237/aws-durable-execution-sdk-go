@@ -1,8 +1,6 @@
 package operations
 
 import (
-	"context"
-
 	durableErrors "github.com/aws/durable-execution-sdk-go/pkg/durable/errors"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
 )
@@ -13,7 +11,7 @@ import (
 func All[TOut any](
 	dc types.DurableContext,
 	name string,
-	branches []func(ctx context.Context, dc types.DurableContext) (TOut, error),
+	branches []func(dc types.DurableContext) (TOut, error),
 	opts ...ParallelOption[TOut],
 ) ([]TOut, error) {
 	batch, err := Parallel(dc, name, branches, opts...)
@@ -35,7 +33,7 @@ func All[TOut any](
 func AllSettled[TOut any](
 	dc types.DurableContext,
 	name string,
-	branches []func(ctx context.Context, dc types.DurableContext) (TOut, error),
+	branches []func(dc types.DurableContext) (TOut, error),
 	opts ...ParallelOption[TOut],
 ) (types.BatchResult[TOut], error) {
 	return Parallel(dc, name, branches, opts...)
@@ -47,7 +45,7 @@ func AllSettled[TOut any](
 func Any[TOut any](
 	dc types.DurableContext,
 	name string,
-	branches []func(ctx context.Context, dc types.DurableContext) (TOut, error),
+	branches []func(dc types.DurableContext) (TOut, error),
 	opts ...ParallelOption[TOut],
 ) (TOut, error) {
 	var zero TOut
@@ -73,7 +71,7 @@ func Any[TOut any](
 func Race[TOut any](
 	dc types.DurableContext,
 	name string,
-	branches []func(ctx context.Context, dc types.DurableContext) (TOut, error),
+	branches []func(dc types.DurableContext) (TOut, error),
 	opts ...ParallelOption[TOut],
 ) (TOut, error) {
 	var zero TOut

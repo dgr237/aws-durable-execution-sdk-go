@@ -1,7 +1,6 @@
 package operations
 
 import (
-	"context"
 	"fmt"
 	"sync"
 
@@ -19,7 +18,7 @@ type ParallelRunner[TOut any] struct {
 	d                types.DurableContext
 	name             string
 	namePtr          *string
-	branches         []func(ctx context.Context, dc types.DurableContext) (TOut, error)
+	branches         []func(dc types.DurableContext) (TOut, error)
 	serdes           types.Serdes
 	maxConcurrency   int
 	completionConfig *types.BatchCompletionConfig
@@ -29,7 +28,7 @@ type ParallelRunner[TOut any] struct {
 func newParallelRunner[TOut any](
 	d types.DurableContext,
 	name string,
-	branches []func(ctx context.Context, dc types.DurableContext) (TOut, error),
+	branches []func(dc types.DurableContext) (TOut, error),
 	opts []ParallelOption[TOut],
 ) *ParallelRunner[TOut] {
 	r := &ParallelRunner[TOut]{
@@ -53,7 +52,7 @@ func newParallelRunner[TOut any](
 func Parallel[TOut any](
 	dc types.DurableContext,
 	name string,
-	branches []func(ctx context.Context, dc types.DurableContext) (TOut, error),
+	branches []func(dc types.DurableContext) (TOut, error),
 	opts ...ParallelOption[TOut],
 ) (types.BatchResult[TOut], error) {
 	r := newParallelRunner[TOut](dc, name, branches, opts)
@@ -271,7 +270,7 @@ func (r *ParallelRunner[TOut]) executeBranch(i int) (TOut, error) {
 		return zero, err
 	}
 
-	result, err := r.branches[i](childDc.Context(), childDc)
+	result, err := r.branches[i](childDc)
 	if err != nil {
 		r.checkpointBranchFailed(branchName, err)
 		return zero, err

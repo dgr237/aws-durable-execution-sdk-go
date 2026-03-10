@@ -1,7 +1,6 @@
 package operations
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -22,7 +21,7 @@ type MapRunner[TIn, TOut any] struct {
 	name             string
 	namePtr          *string
 	items            []TIn
-	mapFn            func(ctx context.Context, dc types.DurableContext, item TIn, index int, items []TIn) (TOut, error)
+	mapFn            func(dc types.DurableContext, item TIn, index int, items []TIn) (TOut, error)
 	serdes           types.Serdes
 	maxConcurrency   int
 	itemNamer        func(item TIn, index int) string
@@ -34,7 +33,7 @@ func newMapRunner[TIn, TOut any](
 	d types.DurableContext,
 	name string,
 	items []TIn,
-	mapFn func(ctx context.Context, dc types.DurableContext, item TIn, index int, items []TIn) (TOut, error),
+	mapFn func(dc types.DurableContext, item TIn, index int, items []TIn) (TOut, error),
 	opts []MapOption[TIn, TOut],
 ) *MapRunner[TIn, TOut] {
 	r := &MapRunner[TIn, TOut]{
@@ -60,7 +59,7 @@ func Map[TIn, TOut any](
 	dc types.DurableContext,
 	name string,
 	items []TIn,
-	mapFn func(ctx context.Context, dc types.DurableContext, item TIn, index int, items []TIn) (TOut, error),
+	mapFn func(dc types.DurableContext, item TIn, index int, items []TIn) (TOut, error),
 	opts ...MapOption[TIn, TOut],
 ) (types.BatchResult[TOut], error) {
 	r := newMapRunner[TIn, TOut](dc, name, items, mapFn, opts)
@@ -278,7 +277,7 @@ func (r *MapRunner[TIn, TOut]) executeIterations(results []TOut, errs []error) (
 					iterName := r.iterationName(i)
 					childDc := r.d.NewChildDurableContext(r.d.Context(), iterName, iterName, r.d.Mode())
 
-					result, err := r.mapFn(childDc.Context(), childDc, item, i, r.items)
+					result, err := r.mapFn(childDc, item, i, r.items)
 					errs[i] = err
 					if err == nil {
 						results[i] = result

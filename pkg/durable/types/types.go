@@ -547,7 +547,7 @@ type NamedParallelBranch[T any] struct {
 	// Name is the branch identifier.
 	Name string
 	// Fn is the branch function to execute.
-	Fn func(ctx context.Context, dc DurableContext) (T, error)
+	Fn func(dc DurableContext) (T, error)
 }
 
 // PromiseSettledResult represents the outcome of a settled promise.

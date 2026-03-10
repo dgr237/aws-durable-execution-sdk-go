@@ -1,7 +1,6 @@
 package operations
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -19,7 +18,7 @@ type StepRunner[TOut any] struct {
 	d             types.DurableContext
 	name          string
 	namePtr       *string
-	fn            func(ctx context.Context, sc types.StepContext) (TOut, error)
+	fn            func(sc types.StepContext) (TOut, error)
 	serdes        types.Serdes
 	semantics     types.StepSemantics
 	retryStrategy func(err error, attempt int) types.RetryDecision
@@ -30,7 +29,7 @@ type StepRunner[TOut any] struct {
 func newStepRunner[TOut any](
 	d types.DurableContext,
 	name string,
-	fn func(ctx context.Context, sc types.StepContext) (TOut, error),
+	fn func(sc types.StepContext) (TOut, error),
 	opts []StepOption[TOut],
 ) *StepRunner[TOut] {
 	r := &StepRunner[TOut]{
@@ -56,7 +55,7 @@ func newStepRunner[TOut any](
 func Step[TOut any](
 	dc types.DurableContext,
 	name string,
-	fn func(ctx context.Context, sc types.StepContext) (TOut, error),
+	fn func(sc types.StepContext) (TOut, error),
 	opts ...StepOption[TOut],
 ) (TOut, error) {
 	r := newStepRunner[TOut](dc, name, fn, opts)
@@ -125,14 +124,13 @@ func (r *StepRunner[TOut]) replayFailed(stored *types.Operation) (TOut, error) {
 
 func (r *StepRunner[TOut]) execute() (TOut, error) {
 	sc := durableCtx.NewStepContext(r.d)
-	ctx := r.d.Context()
 	for attempt := 1; ; attempt++ {
 		if err := r.maybeCheckpointStart(); err != nil {
 			var zero TOut
 			return zero, err
 		}
 
-		result, stepErr := r.fn(ctx, sc)
+		result, stepErr := r.fn(sc)
 
 		if stepErr == nil {
 			return r.handleSuccess(result)

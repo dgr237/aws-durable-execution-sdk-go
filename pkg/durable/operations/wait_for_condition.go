@@ -1,7 +1,6 @@
 package operations
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -19,7 +18,7 @@ type WaitForConditionRunner[TState any] struct {
 	d            types.DurableContext
 	name         string
 	namePtr      *string
-	checkFn      func(ctx context.Context, sc types.StepContext, state TState) (TState, error)
+	checkFn      func(sc types.StepContext, state TState) (TState, error)
 	initialState TState
 	serdes       types.Serdes
 	waitStrategy func(state TState, attempt int) types.WaitStrategyResult
@@ -30,7 +29,7 @@ type WaitForConditionRunner[TState any] struct {
 func newWaitForConditionRunner[TState any](
 	d types.DurableContext,
 	name string,
-	checkFn func(ctx context.Context, sc types.StepContext, state TState) (TState, error),
+	checkFn func(sc types.StepContext, state TState) (TState, error),
 	initialState TState,
 	opts []WaitForConditionOption[TState],
 ) *WaitForConditionRunner[TState] {
@@ -60,7 +59,7 @@ func newWaitForConditionRunner[TState any](
 func WaitForCondition[TState any](
 	dc types.DurableContext,
 	name string,
-	checkFn func(ctx context.Context, sc types.StepContext, state TState) (TState, error),
+	checkFn func(sc types.StepContext, state TState) (TState, error),
 	initialState TState,
 	opts ...WaitForConditionOption[TState],
 ) (TState, error) {
@@ -117,7 +116,7 @@ func (r *WaitForConditionRunner[TState]) poll() (TState, error) {
 	sc := durableCtx.NewStepContext(r.d)
 
 	for attempt := 1; ; attempt++ {
-		newState, err := r.checkFn(r.d.Context(), sc, state)
+		newState, err := r.checkFn(sc, state)
 		if err != nil {
 			return zero, r.checkpointFailed(err)
 		}
