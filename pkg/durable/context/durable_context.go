@@ -2,6 +2,7 @@ package context
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/checkpoint"
@@ -23,9 +24,12 @@ func WithDurableContext(ctx context.Context, dc types.DurableContext) context.Co
 
 // GetDurableContext retrieves the DurableContext stored in ctx.
 // Returns nil if none is present.
-func GetDurableContext(ctx context.Context) types.DurableContext {
-	dc, _ := ctx.Value(durableContextKey{}).(types.DurableContext)
-	return dc
+func GetDurableContext(ctx context.Context) (types.DurableContext, error) {
+	dc, ok := ctx.Value(durableContextKey{}).(types.DurableContext)
+	if !ok {
+		return nil, errors.New("no DurableContext found in context")
+	}
+	return dc, nil
 }
 
 // WithStepContext returns a new context.Context carrying sc.
@@ -35,17 +39,20 @@ func WithStepContext(ctx context.Context, sc types.StepContext) context.Context 
 
 // GetStepContext retrieves the StepContext stored in ctx.
 // Returns nil if none is present.
-func GetStepContext(ctx context.Context) types.StepContext {
-	sc, _ := ctx.Value(stepContextKey{}).(types.StepContext)
-	return sc
+func GetStepContext(ctx context.Context) (types.StepContext, error) {
+	sc, ok := ctx.Value(stepContextKey{}).(types.StepContext)
+	if !ok {
+		return nil, errors.New("no StepContext found in context")
+	}
+	return sc, nil
 }
 
 // NewStepContextFrom creates a step context from the DurableContext in goCtx and
 // returns a new context.Context carrying it.
 func NewStepContextFrom(goCtx context.Context) context.Context {
-	dc := GetDurableContext(goCtx)
-	if dc == nil {
-		return goCtx
+	dc, err := GetDurableContext(goCtx)
+	if err != nil {
+		panic("no Durable context set")
 	}
 	sc := &StepContext{
 		logger: dc.Logger(),

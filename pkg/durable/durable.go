@@ -9,7 +9,7 @@
 //	type MyEvent struct { UserID string }
 //	type MyResult struct { Status string }
 //
-//	handler := durable.WithDurableExecution(func(event MyEvent, ctx context.Context) (MyResult, error) {
+//	handler := durable.WithDurableExecution(func(ctx context.Context, event MyEvent) (MyResult, error) {
 //	    data, err := operations.Step(ctx, "fetch-user", func(sc context.Context) (any, error) {
 //	        return fetchUser(event.UserID)
 //	    })
@@ -17,7 +17,7 @@
 //	        return MyResult{}, err
 //	    }
 //	    return MyResult{Status: "ok"}, nil
-//	})
+//	}, nil)
 //
 //	func main() { lambda.Start(handler) }
 package durable
@@ -67,10 +67,10 @@ type LambdaHandler func(ctx context.Context, event types.DurableExecutionInvocat
 //
 // Example:
 //
-//	handler := durable.WithDurableExecution(func(event OrderEvent, ctx types.DurableContext) (OrderResult, error) {
-//	    order, err := ctx.Step("validate-order", func(sc types.StepContext) (any, error) {
+//	handler := durable.WithDurableExecution(func(ctx context.Context, event OrderEvent) (OrderResult, error) {
+//	    order, err := operations.Step(ctx, "validate-order", func(sc context.Context) (any, error) {
 //	        return validateOrder(event)
-//	    }, nil)
+//	    })
 //	    if err != nil {
 //	        return OrderResult{}, err
 //	    }

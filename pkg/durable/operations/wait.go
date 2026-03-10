@@ -39,7 +39,10 @@ func newWaitRunner(d types.DurableContext, name string, duration types.Duration)
 // ---------------------------------------------------------------------------
 
 func Wait(ctx context.Context, name string, duration types.Duration) error {
-	d := durableCtx.GetDurableContext(ctx)
+	d, err := durableCtx.GetDurableContext(ctx)
+	if err != nil {
+		panic("durable: no DurableContext found in ctx — pass the context.Context received by your HandlerFunc, not context.Background()")
+	}
 	r := newWaitRunner(d, name, duration)
 
 	stored := r.d.GetStepData(r.stepID)

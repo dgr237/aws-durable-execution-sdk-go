@@ -64,7 +64,10 @@ func WaitForCondition[TState any](
 	initialState TState,
 	opts ...WaitForConditionOption[TState],
 ) (TState, error) {
-	d := durableCtx.GetDurableContext(ctx)
+	d, err := durableCtx.GetDurableContext(ctx)
+	if err != nil {
+		panic("durable: no DurableContext found in ctx — pass the context.Context received by your HandlerFunc, not context.Background()")
+	}
 	r := newWaitForConditionRunner[TState](d, name, checkFn, initialState, opts)
 
 	stored := r.d.GetStepData(r.childStepID)

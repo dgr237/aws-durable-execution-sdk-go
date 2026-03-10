@@ -65,7 +65,10 @@ func sendConfirmationEmail(orderID string, userID string) error {
 // durableHandler is the business logic wrapped in a durable execution handler.
 // The DurableContext provides all durable operations.
 var durableHandler = func(ctx context.Context, event OrderEvent) (OrderResult, error) {
-	dc := durablecontext.GetDurableContext(ctx)
+	dc, err := durablecontext.GetDurableContext(ctx)
+	if err != nil {
+		return OrderResult{}, err
+	}
 	dc.Logger().Info("Starting order processing", "userId", event.UserID)
 
 	// Step 1: Validate the order (retried up to 3 times on failure)

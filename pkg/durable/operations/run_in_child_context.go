@@ -16,7 +16,6 @@ import (
 
 type ChildContextRunner[T any] struct {
 	d            types.DurableContext
-	ctx          context.Context
 	name         string
 	namePtr      *string
 	fn           func(ctx context.Context) (T, error)
@@ -27,7 +26,6 @@ type ChildContextRunner[T any] struct {
 
 func newChildContextRunner[T any](
 	d types.DurableContext,
-	goCtx context.Context,
 	name string,
 	fn func(ctx context.Context) (T, error),
 	opts []ChildContextOption[T],
@@ -35,7 +33,6 @@ func newChildContextRunner[T any](
 	defaultSubType := types.OperationSubTypeRunInChildContext
 	r := &ChildContextRunner[T]{
 		d:            d,
-		ctx:          goCtx,
 		name:         name,
 		namePtr:      stringPtr(name),
 		fn:           fn,
@@ -59,8 +56,11 @@ func RunInChildContext[T any](
 	fn func(ctx context.Context) (T, error),
 	opts ...ChildContextOption[T],
 ) (T, error) {
-	d := durableCtx.GetDurableContext(ctx)
-	r := newChildContextRunner[T](d, ctx, name, fn, opts)
+	d, err := durableCtx.GetDurableContext(ctx)
+	if err != nil {
+		panic("durable: no DurableContext found in ctx — pass the context.Context received by your HandlerFunc, not context.Background()")
+	}
+	r := newChildContextRunner[T](d, name, fn, opts)
 
 	subType := types.OperationSubTypeRunInChildContext
 	stored := d.GetStepData(r.stepID)
@@ -106,8 +106,7 @@ func (r *ChildContextRunner[T]) replaySucceeded(stored *types.Operation) (T, err
 
 func (r *ChildContextRunner[T]) replayFailed(ctx context.Context, stored *types.Operation) (T, error) {
 	var zero T
-	dCtx := durableCtx.GetDurableContext(ctx)
-	dCtx.MarkAncestorFinished(r.stepID)
+	r.d.MarkAncestorFinished(r.stepID)
 
 	var cause error
 	if stored.Error != nil {
@@ -132,9 +131,8 @@ func (r *ChildContextRunner[T]) startFresh(ctx context.Context) (T, error) {
 // ---------------------------------------------------------------------------
 
 func (r *ChildContextRunner[T]) handleExecutionError(ctx context.Context, err error) (T, error) {
-	dctx := durableCtx.GetDurableContext(ctx)
 	var zero T
-	if cpErr := dctx.Checkpoint(ctx, r.stepID, types.OperationUpdate{
+	if cpErr := r.d.Checkpoint(ctx, r.stepID, types.OperationUpdate{
 		Id:      r.stepID,
 		Action:  types.OperationActionFail,
 		Type:    types.OperationTypeStep,

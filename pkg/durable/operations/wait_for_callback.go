@@ -27,6 +27,7 @@ type WaitForCallbackRunner[T any] struct {
 
 func newWaitForCallbackRunner[T any](
 	d types.DurableContext,
+	goCtx context.Context,
 	name string,
 	submitter func(ctx context.Context, callbackID string) error,
 	opts []WaitForCallbackOption[T],
@@ -56,8 +57,11 @@ func WaitForCallback[T any](
 	submitter func(ctx context.Context, callbackID string) error,
 	opts ...WaitForCallbackOption[T],
 ) (T, error) {
-	d := durableCtx.GetDurableContext(ctx)
-	r := newWaitForCallbackRunner[T](d, name, submitter, opts)
+	d, err := durableCtx.GetDurableContext(ctx)
+	if err != nil {
+		panic("durable: no DurableContext found in ctx — pass the context.Context received by your HandlerFunc, not context.Background()")
+	}
+	r := newWaitForCallbackRunner[T](d, ctx, name, submitter, opts)
 
 	stored := r.d.GetStepData(r.stepID)
 

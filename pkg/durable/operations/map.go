@@ -63,7 +63,10 @@ func Map[TIn, TOut any](
 	mapFn func(ctx context.Context, item TIn, index int, items []TIn) (TOut, error),
 	opts ...MapOption[TIn, TOut],
 ) (types.BatchResult[TOut], error) {
-	d := durableCtx.GetDurableContext(ctx)
+	d, err := durableCtx.GetDurableContext(ctx)
+	if err != nil {
+		panic("durable: no DurableContext found in ctx — pass the context.Context received by your HandlerFunc, not context.Background()")
+	}
 	r := newMapRunner[TIn, TOut](d, name, items, mapFn, opts)
 
 	r.d.Logger().Info(fmt.Sprintf("Map function called for %s (stepID: %s)", r.name, r.outerStepID))

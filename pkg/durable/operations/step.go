@@ -59,7 +59,10 @@ func Step[TOut any](
 	fn func(ctx context.Context) (TOut, error),
 	opts ...StepOption[TOut],
 ) (TOut, error) {
-	d := durableCtx.GetDurableContext(ctx)
+	d, err := durableCtx.GetDurableContext(ctx)
+	if err != nil {
+		panic("durable: no DurableContext found in ctx — pass the context.Context received by your HandlerFunc, not context.Background()")
+	}
 	r := newStepRunner[TOut](d, name, fn, opts)
 
 	stored := r.d.GetStepData(r.stepID)

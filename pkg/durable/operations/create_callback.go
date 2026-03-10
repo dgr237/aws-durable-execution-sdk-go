@@ -47,7 +47,10 @@ func CreateCallback[TResult any](
 	name string,
 	opts ...CallbackOption[TResult],
 ) (<-chan types.CallbackResult[TResult], string, error) {
-	d := durableCtx.GetDurableContext(ctx)
+	d, err := durableCtx.GetDurableContext(ctx)
+	if err != nil {
+		panic("durable: no DurableContext found in ctx — pass the context.Context received by your HandlerFunc, not context.Background()")
+	}
 	r := newCallbackRunner[TResult](d, name, opts)
 
 	stored := d.GetStepData(r.stepID)

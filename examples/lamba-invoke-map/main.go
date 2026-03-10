@@ -80,16 +80,22 @@ func mainHandler(ctx context.Context, event Event) (MainResult, error) {
 }
 
 func getStartTime(ctx context.Context) time.Time {
-	dc := durablecontext.GetDurableContext(ctx)
+	dc, err := durablecontext.GetDurableContext(ctx)
+	if err != nil {
+		panic("DurableContext not found in context")
+	}
 	startTime, _ := operations.Step(ctx, "start-time", func(stepCtx context.Context) (time.Time, error) {
 		dc.Logger().Info("Starting main execution")
 		return time.Now(), nil
-	}, nil)
+	})
 	return startTime
 }
 
 func initializeFn(stepCtx context.Context) ([]TaskInput, error) {
-	sc := durablecontext.GetStepContext(stepCtx)
+	sc, err := durablecontext.GetStepContext(stepCtx)
+	if err != nil {
+		panic("StepContext not found in context")
+	}
 	sc.Logger().Info("Starting main execution with Map operation for 3 tasks")
 	taskConfigs := make([]TaskInput, 3)
 	for i := 0; i < 3; i++ {
@@ -104,7 +110,10 @@ func initializeFn(stepCtx context.Context) ([]TaskInput, error) {
 }
 
 func runTaskFn(ctx context.Context, taskInput TaskInput, index int, items []TaskInput) (TaskResult, error) {
-	dc := durablecontext.GetDurableContext(ctx)
+	dc, err := durablecontext.GetDurableContext(ctx)
+	if err != nil {
+		panic("DurableContext not found in context")
+	}
 	dc.Logger().Info("Processing task %d with %d ms wait", taskInput.TaskNumber, taskInput.WaitTimeMs)
 
 	taskLambdaArn := os.Getenv("TASK_LAMBDA_NAME")
@@ -133,18 +142,21 @@ func runTaskFn(ctx context.Context, taskInput TaskInput, index int, items []Task
 
 func aggregateResultsFn(startTime time.Time, mapResult types.BatchResult[TaskResult]) func(ctx context.Context) (MainResult, error) {
 	return func(ctx context.Context) (MainResult, error) {
-		sc := durablecontext.GetStepContext(ctx)
-
+		sc, err := durablecontext.GetStepContext(ctx)
+		if err != nil {
+			panic("StepContext not found in context")
+		}
 		taskResults := make([]TaskResult, 0)
 		totalWaitTimeMs := 0
 		errs := make([]error, 0)
 		for _, result := range mapResult.Items {
-			if result.Err != nil {
+			if result.Err == nil {
 				taskResults = append(taskResults, result.Value)
 				totalWaitTimeMs += result.Value.WaitTimeMs
 				sc.Logger().Info("Task %d result: waited %d ms", result.Value.TaskNumber, result.Value.WaitTimeMs)
+			} else {
+				errs = append(errs, result.Err)
 			}
-			errs = append(errs, result.Err)
 		}
 
 		if len(errs) > 0 {

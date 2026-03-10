@@ -56,7 +56,10 @@ func Parallel[TOut any](
 	branches []func(ctx context.Context) (TOut, error),
 	opts ...ParallelOption[TOut],
 ) (types.BatchResult[TOut], error) {
-	d := durableCtx.GetDurableContext(ctx)
+	d, err := durableCtx.GetDurableContext(ctx)
+	if err != nil {
+		panic("durable: no DurableContext found in ctx — pass the context.Context received by your HandlerFunc, not context.Background()")
+	}
 	r := newParallelRunner[TOut](d, name, branches, opts)
 
 	stored := r.d.GetStepData(r.outerStepID)

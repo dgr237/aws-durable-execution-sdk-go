@@ -59,7 +59,10 @@ func Invoke[TIn, TOut any](
 	input TIn,
 	opts ...InvokeOption[TIn, TOut],
 ) (TOut, error) {
-	d := durableCtx.GetDurableContext(ctx)
+	d, err := durableCtx.GetDurableContext(ctx)
+	if err != nil {
+		panic("durable: no DurableContext found in ctx — pass the context.Context received by your HandlerFunc, not context.Background()")
+	}
 	r := newInvokeRunner[TIn, TOut](d, name, funcID, input, opts)
 
 	stored := r.d.GetStepData(r.stepID)
@@ -142,8 +145,7 @@ func (r *InvokeRunner[TIn, TOut]) startFresh(ctx context.Context) (TOut, error) 
 // ---------------------------------------------------------------------------
 
 func (r *InvokeRunner[TIn, TOut]) checkpointStart(ctx context.Context, inputStr string) error {
-	dctx := durableCtx.GetDurableContext(ctx)
-	dctx.Logger().Info(fmt.Sprintf("About to checkpoint START for %s", r.stepID))
+	r.d.Logger().Info(fmt.Sprintf("About to checkpoint START for %s", r.stepID))
 
 	update := types.OperationUpdate{
 		Id:      r.stepID,
@@ -157,11 +159,11 @@ func (r *InvokeRunner[TIn, TOut]) checkpointStart(ctx context.Context, inputStr 
 		Payload: &inputStr,
 	}
 
-	if dctx.ParentID() != "" {
-		update.ParentId = aws.String(dctx.ParentID())
+	if r.d.ParentID() != "" {
+		update.ParentId = aws.String(r.d.ParentID())
 	}
 
-	return dctx.Checkpoint(ctx, r.stepID, update)
+	return r.d.Checkpoint(ctx, r.stepID, update)
 }
 
 // ---------------------------------------------------------------------------
