@@ -44,6 +44,7 @@ type Manager struct {
 	client              Client
 	terminationMgr      *TerminationManager
 	logger              types.Logger
+	strategy            types.CheckpointStrategy
 
 	// For coordinating queue-flush waiters
 	queueDoneCh chan struct{}
@@ -61,6 +62,7 @@ func NewManager(
 	client Client,
 	tm *TerminationManager,
 	logger types.Logger,
+	strategy types.CheckpointStrategy,
 ) *Manager {
 	return &Manager{
 		durableExecutionArn: arn,
@@ -68,6 +70,7 @@ func NewManager(
 		client:              client,
 		terminationMgr:      tm,
 		logger:              logger,
+		strategy:            strategy,
 		queueDoneCh:         make(chan struct{}, 1),
 		finishedAncestors:   make(map[string]bool),
 		operations:          make(map[string]types.OperationInfo),
@@ -134,6 +137,10 @@ func (m *Manager) CheckpointBatch(ctx context.Context, updates []types.Operation
 		go m.processQueue(ctx)
 	}
 
+	if m.strategy == types.CheckpointStrategyOptimistic {
+		return nil
+	}
+
 	// Wait for any one completion signal - since all share the same doneCh,
 	// only the first resolution is needed (the batch was sent as one API call).
 	// However, processQueue signals each item individually, so drain len(updates) signals.
@@ -173,6 +180,9 @@ func (m *Manager) Checkpoint(ctx context.Context, stepID string, update types.Op
 		go m.processQueue(ctx)
 	}
 
+	if m.strategy == types.CheckpointStrategyOptimistic {
+		return nil
+	}
 	return <-doneCh
 }
 

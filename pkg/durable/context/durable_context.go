@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/checkpoint"
 	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
@@ -87,6 +88,16 @@ func (d *DurableContext) GetStepData(stepID string) *types.Operation {
 
 func (d *DurableContext) DurableExecutionArn() string {
 	return d.execCtx.DurableExecutionArn
+}
+
+// ExecutionStartTime returns the start time recorded on the root EXECUTION operation.
+// The bool is false if the timestamp is not present in the loaded state.
+func (d *DurableContext) ExecutionStartTime() (time.Time, bool) {
+	op, ok := d.execCtx.StepData[d.execCtx.ExecutionOperationId]
+	if !ok || op == nil || op.StartTimestamp == nil {
+		return time.Time{}, false
+	}
+	return op.StartTimestamp.Time, true
 }
 
 // NewChildDurableContext creates a child DurableContext and embeds it into a new

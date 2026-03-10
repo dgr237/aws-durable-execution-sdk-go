@@ -44,6 +44,11 @@ type Config struct {
 	// Client is an optional custom backend client (useful for testing).
 	// If nil, a default AWS Lambda client is created automatically.
 	Client checkpoint.Client
+
+	// CheckpointStrategy controls how operation updates are grouped into checkpoint
+	// API calls. Defaults to CheckpointStrategyEager (one API call per update).
+	// See types.CheckpointStrategy for available options and their trade-offs (spec §16.4).
+	CheckpointStrategy types.CheckpointStrategy
 }
 
 // HandlerFunc is the type signature for a durable execution handler function.
@@ -115,7 +120,11 @@ func WithDurableExecution[TEvent any, TResult any](
 			return failedOutput(err), nil
 		}
 
-		return runHandler(goCtx, execCtx, lambdaCtx, mode, checkpointToken, handler)
+		var strategy types.CheckpointStrategy
+		if cfg != nil {
+			strategy = cfg.CheckpointStrategy
+		}
+		return runHandler(goCtx, execCtx, lambdaCtx, mode, checkpointToken, strategy, handler)
 	}
 }
 
@@ -133,6 +142,7 @@ func runHandler[TEvent any, TResult any](
 	lambdaCtx *types.LambdaContext,
 	mode types.DurableExecutionMode,
 	checkpointToken string,
+	strategy types.CheckpointStrategy,
 	handler HandlerFunc[TEvent, TResult],
 ) (types.DurableExecutionInvocationOutput, error) {
 	logger := utils.NewDefaultLogger(execCtx.DurableExecutionArn, execCtx.RequestID, "")
@@ -144,6 +154,7 @@ func runHandler[TEvent any, TResult any](
 		execCtx.Client,
 		execCtx.TerminationManager,
 		logger,
+		strategy,
 	)
 
 	// Ensure the checkpoint manager is told to stop when execution terminates

@@ -4,6 +4,7 @@ package errors
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // DurableError is the base error type for all durable execution errors.
@@ -283,4 +284,28 @@ func (e *AggregateError) Unwrap() []error { return e.Errors }
 // ErrorFromObject creates a Go error from a serialized error object.
 func ErrorFromObject(msg string, cause error) error {
 	return fmt.Errorf("%s: %w", msg, cause)
+}
+
+// runtimeErrorPrefixes are the Lambda error-type prefixes for errors that occur
+// outside the handler context and are automatically retried by Lambda (spec §8.1).
+var runtimeErrorPrefixes = []string{"Runtime.", "Sandbox.", "Extension."}
+
+// sandboxTimedOut has the Sandbox. prefix but is classified as a handler error
+// by Lambda and is therefore NOT automatically retried (spec §8.1).
+const sandboxTimedOut = "Sandbox.Timedout"
+
+// IsRuntimeError reports whether errorType identifies a Lambda runtime/platform
+// error. These are prefixed with "Runtime.", "Sandbox.", or "Extension." and are
+// automatically retried by Lambda up to 3 times; the SDK is not involved in their
+// handling. Exception: "Sandbox.Timedout" is treated as a handler error.
+func IsRuntimeError(errorType string) bool {
+	if errorType == sandboxTimedOut {
+		return false
+	}
+	for _, prefix := range runtimeErrorPrefixes {
+		if strings.HasPrefix(errorType, prefix) {
+			return true
+		}
+	}
+	return false
 }

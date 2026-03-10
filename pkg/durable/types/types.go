@@ -6,6 +6,26 @@ import (
 	"time"
 )
 
+// CheckpointStrategy controls how the SDK groups durable operation updates into
+// checkpoint API calls (spec §16.4).
+type CheckpointStrategy int
+
+const (
+	// CheckpointStrategyEager (default) sends a checkpoint API call for each operation
+	// update. Maximises durability at the cost of more API calls.
+	CheckpointStrategyEager CheckpointStrategy = iota
+
+	// CheckpointStrategyBatched groups concurrent operation updates into a single
+	// checkpoint call. Reduces API call count with a minimal durability trade-off;
+	// the entire batch is atomic so all-or-nothing semantics are preserved.
+	CheckpointStrategyBatched
+
+	// CheckpointStrategyOptimistic enqueues updates without blocking the caller.
+	// Errors are surfaced only when WaitForQueueCompletion is called. Provides the
+	// best throughput at the cost of potentially re-executing more work on failure.
+	CheckpointStrategyOptimistic
+)
+
 // DurableExecutionMode represents the current execution mode of the durable function.
 type DurableExecutionMode string
 
@@ -577,6 +597,10 @@ type DurableContext interface {
 	Terminate(result TerminationResult)
 	GetStepData(stepID string) *Operation
 	DurableExecutionArn() string
+	// ExecutionStartTime returns the start time of the durable execution as recorded
+	// by the service, and whether the value is available. Use this instead of
+	// time.Now() for replay-safe timestamps (spec §14.3).
+	ExecutionStartTime() (time.Time, bool)
 }
 
 // StepContext is passed to step functions for logging (not full durable operations).
