@@ -29,12 +29,12 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambdacontext"
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/checkpoint"
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/client"
-	durableCtx "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
-	durableErrors "github.com/aws/durable-execution-sdk-go/pkg/durable/errors"
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/utils"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/checkpoint"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/client"
+	durableCtx "github.com/dgr237/durable-execution-sdk-go/pkg/durable/context"
+	durableErrors "github.com/dgr237/durable-execution-sdk-go/pkg/durable/errors"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/utils"
 )
 
 const lambdaResponseSizeLimit = 6*1024*1024 - 50 // 6MB minus small envelope overhead

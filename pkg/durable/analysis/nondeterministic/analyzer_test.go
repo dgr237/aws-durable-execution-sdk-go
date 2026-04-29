@@ -3,7 +3,7 @@ package nondeterministic_test
 import (
 	"testing"
 
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/analysis/nondeterministic"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/analysis/nondeterministic"
 	"golang.org/x/tools/go/analysis/analysistest"
 )
 

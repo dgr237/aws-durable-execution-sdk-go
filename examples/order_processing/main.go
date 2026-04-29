@@ -5,10 +5,10 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/durable-execution-sdk-go/pkg/durable"
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/operations"
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/utils"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/operations"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/utils"
 )
 
 // ---- Domain types ----------------------------------------------------------

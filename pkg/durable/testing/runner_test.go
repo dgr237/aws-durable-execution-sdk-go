@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/operations"
-	durabletest "github.com/aws/durable-execution-sdk-go/pkg/durable/testing"
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/operations"
+	durabletest "github.com/dgr237/durable-execution-sdk-go/pkg/durable/testing"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
 )
 
 // Package-level types are required so Go can infer the generic type parameters

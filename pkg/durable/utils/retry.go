@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
 )
 
 // RetryStrategyConfig configures the behavior of a retry strategy.

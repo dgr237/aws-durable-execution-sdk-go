@@ -268,7 +268,7 @@ The `pkg/durable/analysis` packages provide Go static analysis passes built on t
 
 ```sh
 # Install
-go install github.com/aws/durable-execution-sdk-go/cmd/durablecheck@latest
+go install github.com/dgr237/durable-execution-sdk-go/cmd/durablecheck@latest
 
 # Run via go vet
 go vet -vettool=$(which durablecheck) ./...

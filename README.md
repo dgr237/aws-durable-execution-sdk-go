@@ -22,7 +22,7 @@ The SDK enables developers to write multi-step, fault-tolerant Lambda functions 
 ## Installation
 
 ```bash
-go get github.com/aws/durable-execution-sdk-go
+go get github.com/dgr237/durable-execution-sdk-go
 ```
 
 **Requirements:**
@@ -38,10 +38,10 @@ import (
     "fmt"
 
     "github.com/aws/aws-lambda-go/lambda"
-    durable "github.com/aws/durable-execution-sdk-go/pkg/durable"
-    "github.com/aws/durable-execution-sdk-go/pkg/durable/operations"
-    "github.com/aws/durable-execution-sdk-go/pkg/durable/types"
-    "github.com/aws/durable-execution-sdk-go/pkg/durable/utils"
+    durable "github.com/dgr237/durable-execution-sdk-go/pkg/durable"
+    "github.com/dgr237/durable-execution-sdk-go/pkg/durable/operations"
+    "github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
+    "github.com/dgr237/durable-execution-sdk-go/pkg/durable/utils"
 )
 
 type OrderEvent struct {
@@ -342,7 +342,7 @@ All combinators accept the same `...ParallelOption[TOut]` variadic options as `P
 
 ## Retry Strategies
 
-Import `"github.com/aws/durable-execution-sdk-go/pkg/durable/utils"` for retry helpers.
+Import `"github.com/dgr237/durable-execution-sdk-go/pkg/durable/utils"` for retry helpers.
 
 ### Built-in Presets
 
@@ -379,7 +379,7 @@ result, err := operations.Step(dc, "my-step", fn,
 Code between steps runs on every replay and must be deterministic. Use the helpers in the `durable` package:
 
 ```go
-import durable "github.com/aws/durable-execution-sdk-go/pkg/durable"
+import durable "github.com/dgr237/durable-execution-sdk-go/pkg/durable"
 
 // Use instead of time.Now() — returns the execution's start time from checkpointed state
 startedAt, ok := durable.CurrentTime(dc)
@@ -433,7 +433,7 @@ Inject a mock client via `Config`. The `checkpoint.Client` interface requires tw
 ```go
 import (
     "context"
-    "github.com/aws/durable-execution-sdk-go/pkg/durable/types"
+    "github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
 )
 
 type mockClient struct{}
