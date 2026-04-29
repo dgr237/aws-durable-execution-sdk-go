@@ -3,7 +3,7 @@ package closuremutation_test
 import (
 	"testing"
 
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/analysis/closuremutation"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/analysis/closuremutation"
 	"golang.org/x/tools/go/analysis/analysistest"
 )
 

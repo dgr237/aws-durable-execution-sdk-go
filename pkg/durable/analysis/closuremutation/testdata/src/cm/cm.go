@@ -2,8 +2,8 @@
 package cm
 
 import (
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/operations"
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/operations"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
 )
 
 // ── GOOD: reading outer variables is allowed ─────────────────────────────────

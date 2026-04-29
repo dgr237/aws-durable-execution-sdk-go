@@ -1,4 +1,4 @@
-module github.com/aws/durable-execution-sdk-go
+module github.com/dgr237/durable-execution-sdk-go
 
 go 1.24.0
 

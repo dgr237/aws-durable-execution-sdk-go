@@ -1,7 +1,7 @@
 // Package operations contains stub operation definitions for analysis test data.
 package operations
 
-import "github.com/aws/durable-execution-sdk-go/pkg/durable/types"
+import "github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
 
 func Step[TOut any](dc types.DurableContext, name string, fn func(sc types.StepContext) (TOut, error)) (TOut, error) {
 	var z TOut

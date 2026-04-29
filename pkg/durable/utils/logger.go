@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
 )
 
 // DefaultLogger is the built-in structured logger backed by log/slog.

@@ -1,7 +1,7 @@
 package operations
 
 import (
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
 )
 
 // ---------------------------------------------------------------------------

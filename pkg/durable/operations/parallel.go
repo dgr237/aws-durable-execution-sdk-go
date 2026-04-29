@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"sync"
 
-	durableCtx "github.com/aws/durable-execution-sdk-go/pkg/durable/context"
-	durableErrors "github.com/aws/durable-execution-sdk-go/pkg/durable/errors"
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/utils"
+	durableCtx "github.com/dgr237/durable-execution-sdk-go/pkg/durable/context"
+	durableErrors "github.com/dgr237/durable-execution-sdk-go/pkg/durable/errors"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/utils"
 )
 
 // ---------------------------------------------------------------------------

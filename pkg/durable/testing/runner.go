@@ -32,8 +32,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/durable-execution-sdk-go/pkg/durable"
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
 )
 
 const testARN = "arn:aws:lambda:us-east-1:123456789012:function:durable-test:1"

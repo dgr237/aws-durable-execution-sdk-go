@@ -1,8 +1,8 @@
 package operations
 
 import (
-	durableErrors "github.com/aws/durable-execution-sdk-go/pkg/durable/errors"
-	"github.com/aws/durable-execution-sdk-go/pkg/durable/types"
+	durableErrors "github.com/dgr237/durable-execution-sdk-go/pkg/durable/errors"
+	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
 )
 
 // All runs all branches in parallel and returns a slice of their results.
