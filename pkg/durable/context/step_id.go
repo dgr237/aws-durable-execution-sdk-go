@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	durableErrors "github.com/dgr237/durable-execution-sdk-go/pkg/durable/errors"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/utils"
+	durableErrors "github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/errors"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/utils"
 )
 
 // CreateStepID creates a hierarchical step ID.

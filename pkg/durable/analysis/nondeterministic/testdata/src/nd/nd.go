@@ -5,8 +5,8 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/operations"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/operations"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // ── GOOD: non-deterministic calls inside Step are allowed ────────────────────

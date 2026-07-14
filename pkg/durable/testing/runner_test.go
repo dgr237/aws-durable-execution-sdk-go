@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/operations"
-	durabletest "github.com/dgr237/durable-execution-sdk-go/pkg/durable/testing"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/operations"
+	durabletest "github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/testing"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // Package-level types are required so Go can infer the generic type parameters
@@ -339,5 +339,148 @@ func TestRunner_ContextCancelled_ReturnsError(t *testing.T) {
 		t.Log("runner returned nil error after context cancellation (result produced instead)")
 	} else {
 		t.Logf("runner returned error after context cancellation: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Nested combinators inside RunInChildContext
+// ---------------------------------------------------------------------------
+
+// Regression test: a Map inside a RunInChildContext previously failed with an
+// invalid ParentId, because the child context never checkpointed a START and
+// the Map's START referenced it as parent. The test client rejects unknown
+// ParentId references, mirroring the real service.
+func TestRunner_MapInsideChildContext_Succeeds(t *testing.T) {
+	runner := durabletest.NewLocalDurableTestRunner(
+		func(event emptyEvt, dc types.DurableContext) (int, error) {
+			return operations.RunInChildContext(dc, "outer", func(child types.DurableContext) (int, error) {
+				batch, err := operations.Map(child, "double-items", []int{1, 2, 3},
+					func(mapDc types.DurableContext, item int, index int, items []int) (int, error) {
+						return operations.Step(mapDc, fmt.Sprintf("double-%d", index), func(sc types.StepContext) (int, error) {
+							return item * 2, nil
+						})
+					})
+				if err != nil {
+					return 0, err
+				}
+				sum := 0
+				for _, it := range batch.Items {
+					if it.Err != nil {
+						return 0, it.Err
+					}
+					sum += it.Value
+				}
+				return sum, nil
+			})
+		},
+		durabletest.RunConfig{SkipTime: true},
+	)
+
+	result, err := runner.Run(t.Context(), emptyEvt{})
+	if err != nil {
+		t.Fatalf("unexpected runner error: %v", err)
+	}
+	if result.Status() != durabletest.ExecutionStatusSucceeded {
+		t.Fatalf("expected SUCCEEDED, got %s: %v", result.Status(), result.GetError())
+	}
+
+	got, err := result.GetResult()
+	if err != nil {
+		t.Fatalf("GetResult: %v", err)
+	}
+	if got != 12 {
+		t.Errorf("expected sum 12, got %d", got)
+	}
+}
+
+// Same ParentId regression for Parallel nested inside a RunInChildContext.
+func TestRunner_ParallelInsideChildContext_Succeeds(t *testing.T) {
+	runner := durabletest.NewLocalDurableTestRunner(
+		func(event emptyEvt, dc types.DurableContext) (string, error) {
+			return operations.RunInChildContext(dc, "outer", func(child types.DurableContext) (string, error) {
+				batch, err := operations.Parallel(child, "branches", []func(types.DurableContext) (string, error){
+					func(b types.DurableContext) (string, error) { return "A", nil },
+					func(b types.DurableContext) (string, error) { return "B", nil },
+				})
+				if err != nil {
+					return "", err
+				}
+				combined := ""
+				for _, it := range batch.Items {
+					if it.Err != nil {
+						return "", it.Err
+					}
+					combined += it.Value
+				}
+				return combined, nil
+			})
+		},
+		durabletest.RunConfig{SkipTime: true},
+	)
+
+	result, err := runner.Run(t.Context(), emptyEvt{})
+	if err != nil {
+		t.Fatalf("unexpected runner error: %v", err)
+	}
+	if result.Status() != durabletest.ExecutionStatusSucceeded {
+		t.Fatalf("expected SUCCEEDED, got %s: %v", result.Status(), result.GetError())
+	}
+
+	got, err := result.GetResult()
+	if err != nil {
+		t.Fatalf("GetResult: %v", err)
+	}
+	if got != "AB" {
+		t.Errorf("expected 'AB', got %q", got)
+	}
+}
+
+// Map inside RunInChildContext where each iteration suspends on a Wait —
+// exercises the resume path: incomplete iterations must re-run their mapFn
+// (replaying completed inner operations) instead of relying on stale state,
+// and the execution must never return PENDING without a pending operation.
+func TestRunner_MapWithWaitInsideChildContext_Succeeds(t *testing.T) {
+	runner := durabletest.NewLocalDurableTestRunner(
+		func(event emptyEvt, dc types.DurableContext) (int, error) {
+			return operations.RunInChildContext(dc, "outer", func(child types.DurableContext) (int, error) {
+				batch, err := operations.Map(child, "wait-items", []int{1, 2, 3},
+					func(mapDc types.DurableContext, item int, index int, items []int) (int, error) {
+						if err := operations.Wait(mapDc, fmt.Sprintf("pause-%d", index), types.Duration{Seconds: 1}); err != nil {
+							return 0, err
+						}
+						return operations.Step(mapDc, fmt.Sprintf("after-wait-%d", index), func(sc types.StepContext) (int, error) {
+							return item * 10, nil
+						})
+					})
+				if err != nil {
+					return 0, err
+				}
+				sum := 0
+				for _, it := range batch.Items {
+					if it.Err != nil {
+						return 0, it.Err
+					}
+					sum += it.Value
+				}
+				return sum, nil
+			})
+		},
+		durabletest.RunConfig{SkipTime: true},
+	)
+
+	result, err := runner.Run(t.Context(), emptyEvt{})
+	if err != nil {
+		t.Fatalf("unexpected runner error: %v", err)
+	}
+	if result.Status() != durabletest.ExecutionStatusSucceeded {
+		t.Fatalf("expected SUCCEEDED, got %s: %v", result.Status(), result.GetError())
+	}
+
+	got, err := result.GetResult()
+	if err != nil {
+		t.Fatalf("GetResult: %v", err)
+	}
+	if got != 60 {
+		t.Errorf("expected sum 60, got %d", got)
 	}
 }

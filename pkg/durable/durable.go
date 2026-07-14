@@ -29,12 +29,12 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambdacontext"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/checkpoint"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/client"
-	durableCtx "github.com/dgr237/durable-execution-sdk-go/pkg/durable/context"
-	durableErrors "github.com/dgr237/durable-execution-sdk-go/pkg/durable/errors"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/utils"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/checkpoint"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/client"
+	durableCtx "github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/context"
+	durableErrors "github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/errors"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/utils"
 )
 
 const lambdaResponseSizeLimit = 6*1024*1024 - 50 // 6MB minus small envelope overhead
@@ -296,3 +296,6 @@ func extractLambdaContext(ctx context.Context) *types.LambdaContext {
 		InvokedFunctionArn: lc.InvokedFunctionArn,
 	}
 }
+
+// Version of the SDK
+const Version = "0.1.0"

@@ -1,13 +1,14 @@
 package operations
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
-	durableCtx "github.com/dgr237/durable-execution-sdk-go/pkg/durable/context"
-	durableErrors "github.com/dgr237/durable-execution-sdk-go/pkg/durable/errors"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/utils"
+	durableCtx "github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/context"
+	durableErrors "github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/errors"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/utils"
 )
 
 // ---------------------------------------------------------------------------
@@ -137,17 +138,22 @@ func (r *ParallelRunner[TOut]) resumeStarted() (types.BatchResult[TOut], error) 
 		}
 	}
 
+	if shouldSuspendBatch(r.d, errs) {
+		r.suspend()
+	}
+
 	return r.finalize(results, errs, reason)
 }
 
 // startFresh checkpoints the Parallel START, executes all branches, then finalizes.
 func (r *ParallelRunner[TOut]) startFresh() (types.BatchResult[TOut], error) {
 	if err := r.d.Checkpoint(r.outerStepID, types.OperationUpdate{
-		Id:      r.outerStepID,
-		Action:  types.OperationActionStart,
-		Type:    types.OperationTypeContext,
-		SubType: subTypePtr(types.OperationSubTypeParallel),
-		Name:    r.namePtr,
+		Id:       r.outerStepID,
+		Action:   types.OperationActionStart,
+		Type:     types.OperationTypeContext,
+		SubType:  subTypePtr(types.OperationSubTypeParallel),
+		Name:     r.namePtr,
+		ParentId: parentIDPtr(r.d),
 	}); err != nil {
 		r.d.Terminate(types.TerminationResult{
 			Reason:  types.TerminationReasonCheckpointFailed,
@@ -158,6 +164,11 @@ func (r *ParallelRunner[TOut]) startFresh() (types.BatchResult[TOut], error) {
 	}
 
 	results, errs, reason := r.executeBranches()
+
+	if shouldSuspendBatch(r.d, errs) {
+		r.suspend()
+	}
+
 	return r.finalize(results, errs, reason)
 }
 
@@ -272,7 +283,12 @@ func (r *ParallelRunner[TOut]) executeBranch(i int) (TOut, error) {
 
 	result, err := r.branches[i](childDc)
 	if err != nil {
-		r.checkpointBranchFailed(branchName, err)
+		// A TerminatedError means the branch suspended waiting on an external
+		// completion — the branch has not failed, so leave it STARTED.
+		var terminated *durableErrors.TerminatedError
+		if !errors.As(err, &terminated) {
+			r.checkpointBranchFailed(branchName, err)
+		}
 		return zero, err
 	}
 
@@ -356,12 +372,13 @@ func (r *ParallelRunner[TOut]) finalize(results []TOut, errs []error, reason str
 		payloadPtr = &serialized
 	}
 	if err := r.d.Checkpoint(r.outerStepID, types.OperationUpdate{
-		Id:      r.outerStepID,
-		Action:  types.OperationActionSucceed,
-		Type:    types.OperationTypeContext,
-		SubType: subTypePtr(types.OperationSubTypeParallel),
-		Name:    r.namePtr,
-		Payload: payloadPtr,
+		Id:       r.outerStepID,
+		Action:   types.OperationActionSucceed,
+		Type:     types.OperationTypeContext,
+		SubType:  subTypePtr(types.OperationSubTypeParallel),
+		Name:     r.namePtr,
+		Payload:  payloadPtr,
+		ParentId: parentIDPtr(r.d),
 	}); err != nil {
 		r.d.Terminate(types.TerminationResult{
 			Reason:  types.TerminationReasonCheckpointFailed,
@@ -382,6 +399,17 @@ func (r *ParallelRunner[TOut]) branchName(i int) string {
 	return fmt.Sprintf("%s-branch-%d", r.outerStepID, i)
 }
 
+// suspend terminates the invocation (PENDING) and blocks this goroutine; the
+// Parallel resumes via resumeStarted on the next invocation.
+func (r *ParallelRunner[TOut]) suspend() {
+	r.d.Logger().Info(fmt.Sprintf("Parallel %s has branches still in progress, suspending", r.outerStepID))
+	r.d.Terminate(types.TerminationResult{
+		Reason:  types.TerminationReasonCheckpointTerminating,
+		Message: fmt.Sprintf("waiting for parallel %s branches to complete", r.name),
+	})
+	select {}
+}
+
 func deserializeBranchResult[TOut any](
 	d types.DurableContext,
 	serdes types.Serdes,
@@ -389,7 +417,9 @@ func deserializeBranchResult[TOut any](
 	id string,
 ) (TOut, error) {
 	var resultPtr *string
-	if stored.StepDetails != nil {
+	if stored.ContextDetails != nil {
+		resultPtr = stored.ContextDetails.Result
+	} else if stored.StepDetails != nil {
 		resultPtr = stored.StepDetails.Result
 	}
 	return utils.SafeDeserialize[TOut](serdes, resultPtr, id, d.DurableExecutionArn())
