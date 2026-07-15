@@ -7,9 +7,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/operations"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/operations"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // ---------------------------------------------------------------------------

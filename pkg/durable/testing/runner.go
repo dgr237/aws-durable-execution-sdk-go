@@ -32,8 +32,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 const testARN = "arn:aws:lambda:us-east-1:123456789012:function:durable-test:1"
@@ -255,6 +255,12 @@ func (r *LocalDurableTestRunner[TEvent, TResult]) orchestrate(
 		case types.InvocationStatusFailed:
 			return buildFailedResult[TResult](ops, invocations, out.Error, ""), nil
 		case types.InvocationStatusPending:
+			// The real service rejects a PENDING response when no operation is
+			// awaiting an external completion — surface that as a failure here too.
+			if !client.pendingOperationExists() {
+				return buildFailedResult[TResult](ops, invocations, nil,
+					"Cannot return PENDING status with no pending operations"), nil
+			}
 			if err := r.processPending(ctx, client, updates); err != nil {
 				return nil, err
 			}

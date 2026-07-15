@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // ExecutionStatus is the final status of a test execution.

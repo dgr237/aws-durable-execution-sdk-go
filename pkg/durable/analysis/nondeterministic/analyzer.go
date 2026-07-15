@@ -37,7 +37,7 @@ var Analyzer = &analysis.Analyzer{
 	Run:      run,
 }
 
-const durablePkg = "github.com/dgr237/durable-execution-sdk-go/pkg/durable/operations"
+const durablePkg = "github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/operations"
 
 // callbackArgIndex maps each durable operation function name to the 0-based
 // index of its primary FuncLit callback argument.

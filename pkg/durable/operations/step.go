@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"time"
 
-	durableCtx "github.com/dgr237/durable-execution-sdk-go/pkg/durable/context"
-	durableErrors "github.com/dgr237/durable-execution-sdk-go/pkg/durable/errors"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/utils"
+	durableCtx "github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/context"
+	durableErrors "github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/errors"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/utils"
 )
 
 // ---------------------------------------------------------------------------
@@ -151,11 +151,12 @@ func (r *StepRunner[TOut]) maybeCheckpointStart() error {
 		return nil
 	}
 	return r.d.Checkpoint(r.stepID, types.OperationUpdate{
-		Id:      r.stepID,
-		Action:  types.OperationActionStart,
-		Type:    types.OperationTypeStep,
-		SubType: &r.subType,
-		Name:    r.namePtr,
+		Id:       r.stepID,
+		Action:   types.OperationActionStart,
+		Type:     types.OperationTypeStep,
+		SubType:  &r.subType,
+		Name:     r.namePtr,
+		ParentId: parentIDPtr(r.d),
 	})
 }
 
@@ -177,12 +178,13 @@ func (r *StepRunner[TOut]) handleSuccess(result TOut) (TOut, error) {
 	}
 
 	if err := r.d.Checkpoint(r.stepID, types.OperationUpdate{
-		Id:      r.stepID,
-		Action:  types.OperationActionSucceed,
-		Type:    types.OperationTypeStep,
-		SubType: &r.subType,
-		Name:    r.namePtr,
-		Payload: payloadPtr,
+		Id:       r.stepID,
+		Action:   types.OperationActionSucceed,
+		Type:     types.OperationTypeStep,
+		SubType:  &r.subType,
+		Name:     r.namePtr,
+		Payload:  payloadPtr,
+		ParentId: parentIDPtr(r.d),
 	}); err != nil {
 		return zero, err
 	}
@@ -204,12 +206,13 @@ func (r *StepRunner[TOut]) handleFailure(stepErr error, attempt int) (stop bool,
 			if decision.Delay != nil && decision.Delay.ToSeconds() > 0 {
 				delaySeconds := int32(decision.Delay.ToSeconds())
 				if cpErr := r.d.Checkpoint(r.stepID, types.OperationUpdate{
-					Id:      r.stepID,
-					Action:  types.OperationActionRetry,
-					Type:    types.OperationTypeStep,
-					SubType: &r.subType,
-					Name:    r.namePtr,
-					Error:   utils.SafeStringify(stepErr),
+					Id:       r.stepID,
+					Action:   types.OperationActionRetry,
+					Type:     types.OperationTypeStep,
+					SubType:  &r.subType,
+					Name:     r.namePtr,
+					Error:    utils.SafeStringify(stepErr),
+					ParentId: parentIDPtr(r.d),
 					StepOptions: &types.StepOptions{
 						NextAttemptDelaySeconds: &delaySeconds,
 					},
@@ -234,12 +237,13 @@ func (r *StepRunner[TOut]) handleFailure(stepErr error, attempt int) (stop bool,
 	}
 
 	if cpErr := r.d.Checkpoint(r.stepID, types.OperationUpdate{
-		Id:      r.stepID,
-		Action:  types.OperationActionFail,
-		Type:    types.OperationTypeStep,
-		SubType: &r.subType,
-		Name:    r.namePtr,
-		Error:   utils.SafeStringify(stepErr),
+		Id:       r.stepID,
+		Action:   types.OperationActionFail,
+		Type:     types.OperationTypeStep,
+		SubType:  &r.subType,
+		Name:     r.namePtr,
+		Error:    utils.SafeStringify(stepErr),
+		ParentId: parentIDPtr(r.d),
 	}); cpErr != nil {
 		r.d.Terminate(types.TerminationResult{
 			Reason:  types.TerminationReasonCheckpointFailed,

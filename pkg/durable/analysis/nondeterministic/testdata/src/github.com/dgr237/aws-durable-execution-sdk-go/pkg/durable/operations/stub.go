@@ -1,7 +1,7 @@
 // Package operations contains stub operation definitions for analysis test data.
 package operations
 
-import "github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
+import "github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/types"
 
 func Step[TOut any](dc types.DurableContext, name string, fn func(sc types.StepContext) (TOut, error)) (TOut, error) {
 	var z TOut
@@ -30,7 +30,7 @@ func WaitForCallback[T any](dc types.DurableContext, name string, submitter func
 	return z, nil
 }
 
-func WaitForCondition[TState any](dc types.DurableContext, name string, checkFn func(sc types.StepContext, state TState) (TState, error)) (TState, error) {
+func WaitForCondition[TState any](dc types.DurableContext, name string, checkFn func(sc types.StepContext, state TState) (TState, error), initialState TState) (TState, error) {
 	var z TState
 	return z, nil
 }

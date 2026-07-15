@@ -3,7 +3,7 @@
 //
 // Install:
 //
-//	go install github.com/dgr237/durable-execution-sdk-go/cmd/durablecheck@latest
+//	go install github.com/dgr237/aws-durable-execution-sdk-go/cmd/durablecheck@latest
 //
 // Run via go vet:
 //
@@ -20,8 +20,8 @@
 package main
 
 import (
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/analysis/closuremutation"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/analysis/nondeterministic"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/analysis/closuremutation"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/analysis/nondeterministic"
 	"golang.org/x/tools/go/analysis/multichecker"
 )
 

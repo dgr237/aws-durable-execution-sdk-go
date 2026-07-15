@@ -3,8 +3,8 @@ package operations
 import (
 	"fmt"
 
-	durableCtx "github.com/dgr237/durable-execution-sdk-go/pkg/durable/context"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
+	durableCtx "github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/context"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@ package operations
 import (
 	"sync"
 
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // completionTracker monitors batch execution progress and signals early

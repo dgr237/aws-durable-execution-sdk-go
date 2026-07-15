@@ -5,9 +5,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/checkpoint"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/utils"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/checkpoint"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/utils"
 )
 
 // ---------------------------------------------------------------------------

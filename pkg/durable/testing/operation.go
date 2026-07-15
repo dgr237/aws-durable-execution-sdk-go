@@ -1,6 +1,6 @@
 package durabletest
 
-import "github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
+import "github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/types"
 
 // DurableOperation provides read access to a checkpointed operation and
 // interaction methods for callbacks.

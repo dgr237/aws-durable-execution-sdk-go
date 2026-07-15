@@ -5,8 +5,8 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/operations"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/operations"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // ── GOOD: non-deterministic calls inside Step are allowed ────────────────────
@@ -49,10 +49,10 @@ func goodCallback(dc types.DurableContext) {
 // ── GOOD: non-deterministic inside WaitForCondition checkFn ──────────────────
 
 func goodCondition(dc types.DurableContext) {
-	_, _ = operations.WaitForCondition(dc, "cond", func(sc types.StepContext, state int) (int, error) {
+	_, _ = operations.WaitForCondition[int](dc, "cond", func(sc types.StepContext, state int) (int, error) {
 		_ = time.Now() // safe inside checkFn
 		return state, nil
-	})
+	}, 0)
 }
 
 // ── GOOD: deterministic calls are always allowed outside step ─────────────────

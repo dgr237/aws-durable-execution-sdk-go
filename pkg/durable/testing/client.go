@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 type callbackResult struct {
@@ -47,6 +47,22 @@ func newTestClient(arn string) *testClient {
 func (c *testClient) Checkpoint(_ context.Context, req types.CheckpointDurableExecutionRequest) (*types.CheckpointDurableExecutionResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Like the real service, reject any operation whose ParentId does not
+	// reference an already-stored operation or another operation in this batch.
+	inBatch := make(map[string]bool, len(req.Operations))
+	for i := range req.Operations {
+		inBatch[req.Operations[i].Id] = true
+	}
+	for i := range req.Operations {
+		u := &req.Operations[i]
+		if u.ParentId != nil {
+			if _, stored := c.opsMap[*u.ParentId]; !stored && !inBatch[*u.ParentId] {
+				return nil, fmt.Errorf("durabletest: invalid ParentId %q on operation %q: parent operation does not exist", *u.ParentId, u.Id)
+			}
+		}
+	}
+
 	for i := range req.Operations {
 		u := req.Operations[i]
 		c.applyUpdate(&u)
@@ -153,6 +169,28 @@ func (c *testClient) applyUpdate(u *types.OperationUpdate) {
 		end := types.NewFlexibleTime(time.Now().Add(time.Duration(*u.WaitOptions.WaitSeconds) * time.Second))
 		existing.WaitDetails = &types.WaitDetails{ScheduledEndTimestamp: &end}
 	}
+}
+
+// pendingOperationExists reports whether any stored operation is in a state
+// the service can complete externally (wait timer, callback, chained invoke)
+// or a step awaiting retry. Mirrors the service validation
+// "Cannot return PENDING status with no pending operations".
+func (c *testClient) pendingOperationExists() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, op := range c.opsMap {
+		switch op.Type {
+		case types.OperationTypeWait, types.OperationTypeCallback, types.OperationTypeChainedInvoke:
+			if op.Status == types.OperationStatusStarted {
+				return true
+			}
+		case types.OperationTypeStep:
+			if op.Status == types.OperationStatusInProgress {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (c *testClient) currentToken() string {

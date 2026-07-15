@@ -3,10 +3,10 @@ package operations
 import (
 	"fmt"
 
-	durableCtx "github.com/dgr237/durable-execution-sdk-go/pkg/durable/context"
-	durableErrors "github.com/dgr237/durable-execution-sdk-go/pkg/durable/errors"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/utils"
+	durableCtx "github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/context"
+	durableErrors "github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/errors"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/types"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/utils"
 )
 
 // ---------------------------------------------------------------------------
@@ -60,7 +60,7 @@ func RunInChildContext[T any](
 	subType := types.OperationSubTypeRunInChildContext
 	stored := dc.GetStepData(r.stepID)
 
-	if err := durableCtx.ValidateReplayConsistency(r.stepID, types.OperationTypeStep, r.namePtr, &subType, stored); err != nil {
+	if err := durableCtx.ValidateReplayConsistency(r.stepID, types.OperationTypeContext, r.namePtr, &subType, stored); err != nil {
 		r.d.Terminate(types.TerminationResult{
 			Reason:  types.TerminationReasonContextValidationError,
 			Error:   err,
@@ -89,7 +89,9 @@ func (r *ChildContextRunner[T]) replaySucceeded(stored *types.Operation) (T, err
 	r.markCompleted()
 
 	var resultPtr *string
-	if stored.StepDetails != nil {
+	if stored.ContextDetails != nil {
+		resultPtr = stored.ContextDetails.Result
+	} else if stored.StepDetails != nil {
 		resultPtr = stored.StepDetails.Result
 	}
 	result, err := utils.SafeDeserialize[T](r.serdes, resultPtr, r.stepID, r.d.DurableExecutionArn())
@@ -104,13 +106,38 @@ func (r *ChildContextRunner[T]) replayFailed(stored *types.Operation) (T, error)
 	r.d.MarkAncestorFinished(r.stepID)
 
 	var cause error
-	if stored.Error != nil {
+	if stored.ContextDetails != nil && stored.ContextDetails.Error != nil {
+		cause = utils.ErrorFromErrorObject(stored.ContextDetails.Error)
+	} else if stored.Error != nil {
 		cause = utils.ErrorFromErrorObject(stored.Error)
 	}
 	return zero, durableErrors.NewChildContextError(r.stepID, r.namePtr, cause)
 }
 
 func (r *ChildContextRunner[T]) startFresh() (T, error) {
+	var zero T
+
+	// Checkpoint the child context START before running fn, so that nested
+	// operations (Map, Parallel, ...) can reference this stepID as their
+	// ParentId. Skipped when the operation already exists (resumed execution).
+	if r.d.GetStepData(r.stepID) == nil {
+		if err := r.d.Checkpoint(r.stepID, types.OperationUpdate{
+			Id:       r.stepID,
+			Action:   types.OperationActionStart,
+			Type:     types.OperationTypeContext,
+			SubType:  r.childSubType,
+			Name:     r.namePtr,
+			ParentId: parentIDPtr(r.d),
+		}); err != nil {
+			r.d.Terminate(types.TerminationResult{
+				Reason:  types.TerminationReasonCheckpointFailed,
+				Error:   err,
+				Message: fmt.Sprintf("failed to checkpoint START for child context %s: %v", r.stepID, err),
+			})
+			return zero, err
+		}
+	}
+
 	childDc := r.d.NewChildDurableContext(r.d.Context(), r.stepID, r.stepID, r.d.Mode())
 	result, err := r.fn(childDc)
 
@@ -128,12 +155,13 @@ func (r *ChildContextRunner[T]) startFresh() (T, error) {
 func (r *ChildContextRunner[T]) handleExecutionError(err error) (T, error) {
 	var zero T
 	if cpErr := r.d.Checkpoint(r.stepID, types.OperationUpdate{
-		Id:      r.stepID,
-		Action:  types.OperationActionFail,
-		Type:    types.OperationTypeStep,
-		SubType: r.childSubType,
-		Name:    r.namePtr,
-		Error:   utils.SafeStringify(err),
+		Id:       r.stepID,
+		Action:   types.OperationActionFail,
+		Type:     types.OperationTypeContext,
+		SubType:  r.childSubType,
+		Name:     r.namePtr,
+		Error:    utils.SafeStringify(err),
+		ParentId: parentIDPtr(r.d),
 	}); cpErr != nil {
 		r.d.Terminate(types.TerminationResult{
 			Reason:  types.TerminationReasonCheckpointFailed,
@@ -164,12 +192,13 @@ func (r *ChildContextRunner[T]) handleExecutionSuccess(result T) (T, error) {
 	}
 
 	if err := r.d.Checkpoint(r.stepID, types.OperationUpdate{
-		Id:      r.stepID,
-		Action:  types.OperationActionSucceed,
-		Type:    types.OperationTypeStep,
-		SubType: r.childSubType,
-		Name:    r.namePtr,
-		Payload: payloadPtr,
+		Id:       r.stepID,
+		Action:   types.OperationActionSucceed,
+		Type:     types.OperationTypeContext,
+		SubType:  r.childSubType,
+		Name:     r.namePtr,
+		Payload:  payloadPtr,
+		ParentId: parentIDPtr(r.d),
 	}); err != nil {
 		return zero, err
 	}
@@ -187,7 +216,7 @@ func (r *ChildContextRunner[T]) markCompleted() {
 	r.d.MarkOperationState(r.stepID, types.OperationLifecycleStateCompleted, types.OperationMetadata{
 		StepId:  r.stepID,
 		Name:    r.namePtr,
-		Type:    types.OperationTypeStep,
+		Type:    types.OperationTypeContext,
 		SubType: r.childSubType,
 	})
 }

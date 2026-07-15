@@ -6,8 +6,8 @@ import (
 	"crypto/md5"
 	"fmt"
 
-	durableErrors "github.com/dgr237/durable-execution-sdk-go/pkg/durable/errors"
-	"github.com/dgr237/durable-execution-sdk-go/pkg/durable/types"
+	durableErrors "github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/errors"
+	"github.com/dgr237/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // Client is the interface for communicating with the durable execution backend.
