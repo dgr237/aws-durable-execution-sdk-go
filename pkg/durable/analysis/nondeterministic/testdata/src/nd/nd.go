@@ -52,7 +52,7 @@ func goodCondition(dc types.DurableContext) {
 	_, _ = operations.WaitForCondition(dc, "cond", func(sc types.StepContext, state int) (int, error) {
 		_ = time.Now() // safe inside checkFn
 		return state, nil
-	})
+	}, 0)
 }
 
 // ── GOOD: deterministic calls are always allowed outside step ─────────────────
