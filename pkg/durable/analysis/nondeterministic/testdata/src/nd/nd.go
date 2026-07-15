@@ -49,7 +49,7 @@ func goodCallback(dc types.DurableContext) {
 // ── GOOD: non-deterministic inside WaitForCondition checkFn ──────────────────
 
 func goodCondition(dc types.DurableContext) {
-	_, _ = operations.WaitForCondition(dc, "cond", func(sc types.StepContext, state int) (int, error) {
+	_, _ = operations.WaitForCondition[int](dc, "cond", func(sc types.StepContext, state int) (int, error) {
 		_ = time.Now() // safe inside checkFn
 		return state, nil
 	}, 0)

@@ -30,7 +30,7 @@ func WaitForCallback[T any](dc types.DurableContext, name string, submitter func
 	return z, nil
 }
 
-func WaitForCondition[TState any](dc types.DurableContext, name string, checkFn func(sc types.StepContext, state TState) (TState, error)) (TState, error) {
+func WaitForCondition[TState any](dc types.DurableContext, name string, checkFn func(sc types.StepContext, state TState) (TState, error), initialState TState) (TState, error) {
 	var z TState
 	return z, nil
 }
